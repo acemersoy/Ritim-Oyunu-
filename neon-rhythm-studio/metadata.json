@@ -1,0 +1,6 @@
+
+{
+  "name": "Neon Rhythm Studio",
+  "description": "A futuristic rhythm game interface featuring AI-powered beat mapping, neon aesthetics, and a sleek mobile-first experience.",
+  "requestFramePermissions": ["camera", "microphone"]
+}
