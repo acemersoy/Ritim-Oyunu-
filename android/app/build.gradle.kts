@@ -24,7 +24,7 @@ android {
 
     buildTypes {
         debug {
-            buildConfigField("String", "BASE_URL", "\"https://meals-honey-hanging-stylus.trycloudflare.com/api/\"")
+            buildConfigField("String", "BASE_URL", "\"https://industry-expanding-ban-primarily.trycloudflare.com/api/\"")
         }
         release {
             isMinifyEnabled = true
@@ -33,7 +33,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            buildConfigField("String", "BASE_URL", "\"https://meals-honey-hanging-stylus.trycloudflare.com/api/\"")
+            buildConfigField("String", "BASE_URL", "\"https://industry-expanding-ban-primarily.trycloudflare.com/api/\"")
         }
     }
 

@@ -4,13 +4,131 @@ import numpy as np
 
 def detect_tempo_and_beats(y: np.ndarray, sr: int) -> tuple[float, np.ndarray]:
     """
-    Detect tempo (BPM) and beat positions.
+    Detect tempo (BPM) and beat positions using windowed beat tracking.
+
+    For tracks longer than 90s, splits audio into overlapping 60s windows
+    (15s overlap) so librosa.beat.beat_track() covers the full duration.
+    Beats from adjacent windows are merged at the overlap midpoint.
+    Gaps are filled with BPM-extrapolated beats.
+
     Returns (bpm, beat_times_seconds).
     """
+    duration = len(y) / sr
+
+    # Short tracks: single-pass detection
+    if duration <= 90:
+        return _detect_single_pass(y, sr)
+
+    # --- Windowed detection for longer tracks ---
+    window_sec = 60.0
+    overlap_sec = 15.0
+    step_sec = window_sec - overlap_sec  # 45s
+
+    all_window_beats: list[tuple[float, float, np.ndarray]] = []
+    all_bpms: list[float] = []
+
+    start = 0.0
+    while start < duration:
+        end = min(start + window_sec, duration)
+
+        # Skip very short final windows
+        if end - start < 5.0:
+            break
+
+        start_sample = int(start * sr)
+        end_sample = int(end * sr)
+        y_window = y[start_sample:end_sample]
+
+        tempo, beat_frames = librosa.beat.beat_track(y=y_window, sr=sr)
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+
+        # Convert to absolute time
+        beat_times_abs = beat_times + start
+
+        # Extract BPM
+        if hasattr(tempo, "__len__"):
+            bpm = float(tempo[0]) if len(tempo) > 0 else 0.0
+        else:
+            bpm = float(tempo)
+
+        if bpm > 0:
+            all_bpms.append(bpm)
+
+        all_window_beats.append((start, end, beat_times_abs))
+        start += step_sec
+
+    if not all_bpms:
+        return 120.0, np.array([])
+
+    # Global BPM: median of all window BPMs
+    global_bpm = float(np.median(all_bpms))
+
+    # Merge beats using midpoint cutoff at each overlap
+    merged_beats: list[float] = []
+    n_windows = len(all_window_beats)
+
+    for i, (w_start, w_end, beats) in enumerate(all_window_beats):
+        if len(beats) == 0:
+            continue
+
+        if i == 0:
+            # First window: keep beats below the midpoint of overlap with next
+            if n_windows > 1:
+                next_start = all_window_beats[1][0]
+                cutoff = (next_start + w_end) / 2.0
+                keep = beats[beats < cutoff]
+            else:
+                keep = beats
+        elif i == n_windows - 1:
+            # Last window: keep beats above the midpoint of overlap with previous
+            prev_end = all_window_beats[i - 1][1]
+            cutoff = (w_start + prev_end) / 2.0
+            keep = beats[beats >= cutoff]
+        else:
+            # Middle window: keep beats between two midpoints
+            prev_end = all_window_beats[i - 1][1]
+            lower = (w_start + prev_end) / 2.0
+            next_start = all_window_beats[i + 1][0]
+            upper = (next_start + w_end) / 2.0
+            keep = beats[(beats >= lower) & (beats < upper)]
+
+        merged_beats.extend(keep.tolist())
+
+    if len(merged_beats) < 2:
+        # Fall back to BPM-based grid
+        beat_period = 60.0 / global_bpm
+        return global_bpm, np.arange(beat_period, duration, beat_period)
+
+    merged_beats.sort()
+
+    # Fill gaps where consecutive beats are too far apart (> 2x expected)
+    beat_period = 60.0 / global_bpm
+    gap_threshold = beat_period * 2.0
+
+    filled: list[float] = [merged_beats[0]]
+    for i in range(1, len(merged_beats)):
+        gap = merged_beats[i] - filled[-1]
+        if gap > gap_threshold:
+            t = filled[-1] + beat_period
+            while t < merged_beats[i] - beat_period * 0.5:
+                filled.append(t)
+                t += beat_period
+        filled.append(merged_beats[i])
+
+    # Extend to end of song if beats stop early
+    last_beat = filled[-1]
+    while last_beat + beat_period < duration - 1.0:
+        last_beat += beat_period
+        filled.append(last_beat)
+
+    return global_bpm, np.array(filled)
+
+
+def _detect_single_pass(y: np.ndarray, sr: int) -> tuple[float, np.ndarray]:
+    """Original single-pass beat detection for short tracks."""
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
 
-    # tempo can be an array in some librosa versions
     if hasattr(tempo, "__len__"):
         bpm = float(tempo[0]) if len(tempo) > 0 else 120.0
     else:

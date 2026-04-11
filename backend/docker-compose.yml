@@ -5,6 +5,8 @@ services:
       - "8000:8000"
     volumes:
       - backend-data:/app/data
+      - ./app:/app/app
+      - ./main.py:/app/main.py
     environment:
       - UPLOAD_DIR=/app/data/uploads
       - WAV_DIR=/app/data/wav
