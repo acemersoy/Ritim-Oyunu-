@@ -2,9 +2,17 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.0
 python-multipart==0.0.9
 librosa==0.10.2
-numpy>=1.26.4
+numpy>=1.26.4,<2.0
 pydub==0.25.1
 aiofiles==24.1.0
 pydantic==2.9.0
 sqlalchemy==2.0.35
 aiosqlite==0.20.0
+# Source separation (Demucs v4 — requires torch, torchaudio)
+demucs>=4.0.0
+# Polyphonic note detection (Spotify Basic Pitch — use ONNX for lightweight inference)
+basic-pitch[onnx]>=0.3.0
+# Audio I/O for temp WAV files
+soundfile>=0.12.0
+# Signal processing (transitive via librosa, pinned for compatibility)
+scipy>=1.11.0

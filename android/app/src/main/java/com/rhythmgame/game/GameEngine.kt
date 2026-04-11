@@ -19,14 +19,14 @@ class GameEngine(
     private val chart: Chart,
     private val audioSyncManager: AudioSyncManager?,
     private val audioOffsetMs: Long = 0,
+    private val gameScreenStyle: String = "highway",
     private val onGameFinished: (GameState) -> Unit = {},
 ) : SurfaceView(context), SurfaceHolder.Callback {
 
-    private var gameThread: Job? = null
     private var isRunning = false
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
-    private lateinit var renderer: GameRenderer
+    private lateinit var renderer: IGameRenderer
     private lateinit var noteManager: NoteManager
     private lateinit var inputHandler: InputHandler
     private val scoreManager = ScoreManager()
@@ -40,8 +40,17 @@ class GameEngine(
     private val hitEffects = mutableListOf<HitEffect>()
     private val pressedLanes = mutableSetOf<Int>()
     private val particles = mutableListOf<Particle>()
+    private val particlePool = ParticlePool(300)
     private val random = Random()
-    private val lock = Any()  // Synchronizes access to hitEffects, particles, pressedLanes
+    private val lock = Any()
+
+    // Pointer-to-lane tracking for glissando
+    private val pointerLanes = mutableMapOf<Int, Int>()
+
+    // Smoke particle constants
+    private val maxParticles = 250
+    private val smokeVariantCount = 4
+    private val maxSmokeSize = 45f
 
     // Power Bar state
     private var powerActive = false
@@ -51,6 +60,11 @@ class GameEngine(
     private var powerActivationFill = 0f
     private var lastPowerTapTimeMs = 0L
     private val doubleTapThresholdMs = 400L
+    private var powerBarCombo = 0  // Separate combo counter for power bar (not incremented during special)
+
+    // Track whether UI state needs updating (reduces GameState copies)
+    @Volatile
+    private var stateNeedsUpdate = true
 
     init {
         holder.addCallback(this)
@@ -61,17 +75,28 @@ class GameEngine(
         val w = width.toFloat()
         val h = height.toFloat()
 
-        renderer = GameRenderer(w, h)
+        val isArc = gameScreenStyle == "arc"
+        renderer = if (isArc) ArcGameRenderer(w, h) else GameRenderer(w, h)
         noteManager = NoteManager(
             notes = chart.notes,
             hitLineY = renderer.getHitLineY(),
             screenHeight = h,
         )
-        inputHandler = InputHandler(
-            screenWidth = w,
-            highwayBottomLeft = renderer.getHighwayBottomLeft(),
-            highwayBottomWidth = renderer.getHighwayBottomWidth(),
-        )
+        inputHandler = if (isArc) {
+            val arcRenderer = renderer as ArcGameRenderer
+            InputHandler(
+                screenWidth = w,
+                highwayBottomLeft = renderer.getHighwayBottomLeft(),
+                highwayBottomWidth = renderer.getHighwayBottomWidth(),
+                arcRenderer = arcRenderer,
+            )
+        } else {
+            InputHandler(
+                screenWidth = w,
+                highwayBottomLeft = renderer.getHighwayBottomLeft(),
+                highwayBottomWidth = renderer.getHighwayBottomWidth(),
+            )
+        }
 
         startCountdown()
     }
@@ -92,7 +117,10 @@ class GameEngine(
 
         scope.launch {
             for (i in 3 downTo 1) {
-                _gameState.value = _gameState.value.copy(countdownValue = i)
+                _gameState.value = _gameState.value.copy(
+                    countdownValue = i,
+                    frameTimeMs = System.currentTimeMillis(),
+                )
                 renderFrame()
                 delay(1000)
             }
@@ -100,41 +128,52 @@ class GameEngine(
         }
     }
 
+    private var gameThread: Thread? = null
+
+    private fun startGameLoop() {
+        isRunning = true
+        gameThread = Thread({
+            var lastTimeNanos = System.nanoTime()
+            while (isRunning) {
+                if (_gameState.value.phase != GamePhase.PLAYING) {
+                    lastTimeNanos = System.nanoTime()
+                    try { Thread.sleep(16) } catch (_: InterruptedException) { break }
+                    continue
+                }
+                val now = System.nanoTime()
+                val deltaTimeS = (now - lastTimeNanos).toFloat() / 1_000_000_000f
+                lastTimeNanos = now
+                updateGame(deltaTimeS)
+                renderFrame()
+            }
+        }, "GameLoop").apply {
+            priority = Thread.MAX_PRIORITY
+            start()
+        }
+    }
+
     private fun startGame() {
         _gameState.value = _gameState.value.copy(phase = GamePhase.PLAYING)
         gameStartTimeMs = System.currentTimeMillis()
 
-        val launchGameLoop = {
-            isRunning = true
-            gameThread = scope.launch {
-                val targetFrameTimeMs = 16L  // ~60 FPS
-                while (isRunning && _gameState.value.phase == GamePhase.PLAYING) {
-                    val frameStart = System.currentTimeMillis()
-                    updateGame()
-                    renderFrame()
-                    val elapsed = System.currentTimeMillis() - frameStart
-                    val sleepTime = targetFrameTimeMs - elapsed
-                    if (sleepTime > 0) delay(sleepTime)
-                }
-            }
-        }
-
         if (audioSyncManager != null) {
-            // Wait for audio to be ready before starting game loop
             audioSyncManager.play {
                 gameStartTimeMs = System.currentTimeMillis()
-                launchGameLoop()
+                startGameLoop()
             }
         } else {
-            launchGameLoop()
+            startGameLoop()
         }
     }
 
-    private fun updateGame() {
+    private fun updateGame(deltaTimeS: Float) {
+        // Single timestamp for the entire frame
+        val now = System.currentTimeMillis()
+
         val currentTimeMs = if (audioSyncManager != null) {
             audioSyncManager.getCurrentPositionMs()
         } else {
-            System.currentTimeMillis() - gameStartTimeMs
+            now - gameStartTimeMs
         }
 
         val activeNotes = noteManager.update(currentTimeMs)
@@ -145,31 +184,50 @@ class GameEngine(
                 if (note.hitResult == HitResult.MISS && note.isHit && !note.missReported) {
                     note.missReported = true
                     scoreManager.onHit(HitResult.MISS)
+                    powerBarCombo = 0
                     hitEffects.add(
-                        HitEffect(note.note.lane, HitResult.MISS, System.currentTimeMillis(), renderer.getHitLineY())
+                        HitEffect.create(note.note.lane, HitResult.MISS, now, renderer.getHitLineY())
                     )
+                    stateNeedsUpdate = true
                 }
             }
 
             // Clean old hit effects
-            val now = System.currentTimeMillis()
             hitEffects.removeAll { now - it.createdAt > 600 }
 
-            // Update particles
+            // Update smoke particles: air resistance, expansion, no gravity
+            val frames = deltaTimeS * 60f
+            val drag = (1f - 0.02f * frames).coerceIn(0.5f, 1f)
+            val expand = 1f + 0.02f * frames
+
             val particleIterator = particles.iterator()
             while (particleIterator.hasNext()) {
                 val p = particleIterator.next()
-                p.x += p.vx
-                p.y += p.vy
-                p.vy += 0.3f // gravity
-                p.life -= 0.02f
-                p.size *= 0.98f
-                if (p.life <= 0f) particleIterator.remove()
+                p.x += p.vx * frames
+                p.y += p.vy * frames
+                p.vx *= drag
+                p.vy *= drag
+                p.size = (p.size * expand).coerceAtMost(maxSmokeSize)
+                p.rotation += p.vx * 2f * frames
+                p.life -= 0.02f * frames
+                if (p.life <= 0f) {
+                    particleIterator.remove()
+                    particlePool.recycle(p)
+                }
+            }
+
+            // Continuous smoke emission for held lanes (1-2 particles/frame)
+            for (lane in pressedLanes) {
+                if (particles.size >= maxParticles) break
+                spawnSmokeParticle(lane)
+                if (random.nextFloat() < 0.5f && particles.size < maxParticles) {
+                    spawnSmokeParticle(lane)
+                }
             }
         }
 
-        // Check if game is over: 1.5 seconds after song duration (wall clock, guaranteed)
-        val elapsedSinceStart = System.currentTimeMillis() - gameStartTimeMs - totalPausedMs
+        // Check if game is over
+        val elapsedSinceStart = now - gameStartTimeMs - totalPausedMs
         if (elapsedSinceStart > chart.durationMs + 1500) {
             finishGame()
             return
@@ -183,7 +241,7 @@ class GameEngine(
             val pbMultiplier: Float
 
             if (powerActive) {
-                val elapsedPower = System.currentTimeMillis() - powerStartTimeMs
+                val elapsedPower = now - powerStartTimeMs
                 val remaining = (powerDurationMs - elapsedPower).coerceAtLeast(0)
                 pbProgress = (remaining.toFloat() / powerDurationMs) * powerActivationFill
                 pbRemainingMs = remaining
@@ -196,7 +254,7 @@ class GameEngine(
                 pbActive = powerActive
                 pbMultiplier = powerMultiplier
             } else {
-                pbProgress = (scoreManager.getCombo().toFloat() / 100f).coerceAtMost(1f)
+                pbProgress = (powerBarCombo.toFloat() / 100f).coerceAtMost(1f)
                 pbRemainingMs = 0
                 pbActive = false
                 pbMultiplier = 1f
@@ -204,6 +262,7 @@ class GameEngine(
 
             _gameState.value = _gameState.value.copy(
                 currentTimeMs = currentTimeMs,
+                frameTimeMs = now,
                 score = scoreManager.getScore(),
                 combo = scoreManager.getCombo(),
                 maxCombo = scoreManager.getMaxCombo(),
@@ -211,6 +270,7 @@ class GameEngine(
                 greatCount = scoreManager.getGreatCount(),
                 goodCount = scoreManager.getGoodCount(),
                 missCount = scoreManager.getMissCount(),
+                overpressCount = scoreManager.getOverpressCount(),
                 comboMultiplier = if (pbActive) pbMultiplier else scoreManager.comboMultiplier.coerceAtMost(4.0f),
                 activeNotes = activeNotes,
                 hitEffects = hitEffects.toList(),
@@ -227,42 +287,39 @@ class GameEngine(
     }
 
     private fun renderFrame() {
-        var canvas: Canvas? = null
+        val canvas: Canvas = try {
+            holder.lockHardwareCanvas()
+        } catch (_: Exception) {
+            try { holder.lockCanvas() } catch (_: Exception) { null }
+        } ?: return
         try {
-            canvas = holder.lockCanvas()
-            if (canvas != null) {
-                synchronized(holder) {
-                    renderer.render(canvas, _gameState.value)
-                }
-            }
+            renderer.render(canvas, _gameState.value)
         } finally {
-            if (canvas != null) {
-                holder.unlockCanvasAndPost(canvas)
-            }
+            try { holder.unlockCanvasAndPost(canvas) } catch (_: Exception) {}
         }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val state = _gameState.value
 
-        if (state.phase == GamePhase.PAUSED) {
-            return true // Consume touch but don't resume - handled by Compose overlay
-        }
-
+        if (state.phase == GamePhase.PAUSED) return true
         if (state.phase != GamePhase.PLAYING) return true
 
+        val now = System.currentTimeMillis()
         val currentTimeMs = if (audioSyncManager != null) {
             audioSyncManager.getCurrentPositionMs()
         } else {
-            System.currentTimeMillis() - gameStartTimeMs
+            now - gameStartTimeMs
         }
 
-        // Power bar double-tap detection (right side of screen)
+        // Power bar double-tap detection — ignore this pointer for lane input
         if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
             val pointerIndex = event.actionIndex
+            val pointerId = event.getPointerId(pointerIndex)
             val tapX = event.getX(pointerIndex)
             val tapY = event.getY(pointerIndex)
             if (isInPowerBarZone(tapX, tapY)) {
+                inputHandler.ignorePointer(pointerId)
                 handlePowerBarTap()
                 return true
             }
@@ -273,59 +330,96 @@ class GameEngine(
             for (touchEvent in touchEvents) {
                 when (touchEvent.action) {
                     InputHandler.TouchAction.DOWN -> {
-                        pressedLanes.add(touchEvent.lane)
+                        pointerLanes[touchEvent.pointerId] = touchEvent.lane
                         val result = noteManager.tryHit(touchEvent.lane, currentTimeMs)
                         if (result != null) {
                             val (hitResult, _) = result
                             scoreManager.onHit(hitResult)
-                            spawnParticles(touchEvent.lane, hitResult)
+                            if (hitResult != HitResult.MISS) {
+                                if (!powerActive) powerBarCombo++
+                            } else {
+                                powerBarCombo = 0
+                            }
                             hitEffects.add(
-                                HitEffect(touchEvent.lane, hitResult, System.currentTimeMillis(), renderer.getHitLineY())
+                                HitEffect.create(touchEvent.lane, hitResult, now, renderer.getHitLineY())
+                            )
+                        } else {
+                            // Overpress: tapped lane with no note nearby
+                            scoreManager.onOverpress()
+                            powerBarCombo = 0
+                            hitEffects.add(
+                                HitEffect.create(touchEvent.lane, HitResult.MISS, now, renderer.getHitLineY())
                             )
                         }
+                        // Smoke burst on tap/glissando enter (3 particles)
+                        spawnSmokeBurst(touchEvent.lane)
+                        stateNeedsUpdate = true
                     }
                     InputHandler.TouchAction.UP -> {
-                        pressedLanes.remove(touchEvent.lane)
+                        pointerLanes.remove(touchEvent.pointerId)
                         noteManager.releaseHold(touchEvent.lane)
                     }
                 }
             }
+            // Recompute pressedLanes from active pointer mapping
+            pressedLanes.clear()
+            pressedLanes.addAll(pointerLanes.values)
         }
 
         return true
     }
 
-    private fun spawnParticles(lane: Int, result: HitResult) {
-        if (result == HitResult.MISS) return
-        val centerX = renderer.getLaneCenterXAtStrikeline(lane - 1)
-        val centerY = renderer.getStrikeLineY()
-        val color = when (lane) {
-            1 -> android.graphics.Color.rgb(76, 175, 80)
-            2 -> android.graphics.Color.rgb(255, 87, 34)
-            3 -> android.graphics.Color.rgb(255, 235, 59)
-            4 -> android.graphics.Color.rgb(33, 150, 243)
-            5 -> android.graphics.Color.rgb(255, 152, 0)
-            else -> android.graphics.Color.WHITE
-        }
-        val count = when (result) {
-            HitResult.PERFECT -> 25
-            HitResult.GREAT -> 18
-            HitResult.GOOD -> 12
-            else -> 0
-        }
-        for (i in 0 until count) {
-            val angle = random.nextFloat() * Math.PI.toFloat() * 2
-            val speed = 3f + random.nextFloat() * 8f
-            particles.add(Particle(
-                x = centerX,
-                y = centerY,
-                vx = kotlin.math.cos(angle) * speed,
-                vy = -kotlin.math.abs(kotlin.math.sin(angle) * speed) - 2f,
+    /**
+     * Spawn a burst of 3 smoke particles on initial tap or glissando lane-enter.
+     * Must be called while holding [lock].
+     */
+    private fun spawnSmokeBurst(lane: Int) {
+        val laneIndex = lane - 1
+        val (centerX, centerY) = renderer.getFretPosition(laneIndex)
+        val (dirX, dirY) = renderer.getParticleDirection(laneIndex)
+        val color = renderer.getLaneColor(laneIndex)
+
+        for (i in 0 until 3) {
+            if (particles.size >= maxParticles) break
+            val speed = 4f + random.nextFloat() * 4f
+            particles.add(particlePool.obtain(
+                x = centerX + (random.nextFloat() - 0.5f) * 20f,
+                y = centerY + dirY * random.nextFloat() * 10f,
+                vx = dirX * speed + (random.nextFloat() - 0.5f) * 2f,
+                vy = dirY * speed + (random.nextFloat() - 0.5f) * 2f,
                 life = 1.0f,
                 color = color,
-                size = 4f + random.nextFloat() * 6f,
+                size = 10f + random.nextFloat() * 8f,
+                rotation = random.nextFloat() * 360f,
+                textureIndex = random.nextInt(smokeVariantCount),
+                laneIndex = laneIndex,
             ))
         }
+    }
+
+    /**
+     * Spawn a single smoke particle for continuous emission while a lane is held.
+     * Must be called while holding [lock].
+     */
+    private fun spawnSmokeParticle(lane: Int) {
+        val laneIndex = lane - 1
+        val (centerX, centerY) = renderer.getFretPosition(laneIndex)
+        val (dirX, dirY) = renderer.getParticleDirection(laneIndex)
+        val color = renderer.getLaneColor(laneIndex)
+
+        val speed = 3f + random.nextFloat() * 3f
+        particles.add(particlePool.obtain(
+            x = centerX + (random.nextFloat() - 0.5f) * 16f,
+            y = centerY + dirY * random.nextFloat() * 8f,
+            vx = dirX * speed + (random.nextFloat() - 0.5f) * 1.5f,
+            vy = dirY * speed + (random.nextFloat() - 0.5f) * 1.5f,
+            life = 1.0f,
+            color = color,
+            size = 8f + random.nextFloat() * 6f,
+            rotation = random.nextFloat() * 360f,
+            textureIndex = random.nextInt(smokeVariantCount),
+            laneIndex = laneIndex,
+        ))
     }
 
     private fun isInPowerBarZone(x: Float, y: Float): Boolean {
@@ -344,16 +438,17 @@ class GameEngine(
 
     private fun activatePower() {
         if (powerActive) return
-        val combo = scoreManager.getCombo()
+        val pbCombo = powerBarCombo
         val tier = when {
-            combo >= 100 -> 2
-            combo >= 50 -> 1
+            pbCombo >= 100 -> 2
+            pbCombo >= 50 -> 1
             else -> return
         }
 
         powerActive = true
         powerStartTimeMs = System.currentTimeMillis()
-        powerActivationFill = (combo.toFloat() / 100f).coerceAtMost(1f)
+        powerActivationFill = (pbCombo.toFloat() / 100f).coerceAtMost(1f)
+        powerBarCombo = 0
 
         when (tier) {
             2 -> { powerDurationMs = 20_000L; powerMultiplier = 4f }
@@ -365,9 +460,17 @@ class GameEngine(
     fun pauseGame() {
         if (_gameState.value.phase == GamePhase.PLAYING) {
             pauseStartMs = System.currentTimeMillis()
-            _gameState.value = _gameState.value.copy(phase = GamePhase.PAUSED)
+            _gameState.value = _gameState.value.copy(
+                phase = GamePhase.PAUSED,
+                frameTimeMs = pauseStartMs,
+            )
             audioSyncManager?.pause()
-            isRunning = false
+            // Clear touch state to avoid stale pointer data after resume
+            synchronized(lock) {
+                pressedLanes.clear()
+                pointerLanes.clear()
+            }
+            inputHandler.reset()
             renderFrame()
         }
     }
@@ -380,27 +483,7 @@ class GameEngine(
                 powerStartTimeMs += pauseDuration
             }
             _gameState.value = _gameState.value.copy(phase = GamePhase.PLAYING)
-
-            val launchGameLoop = {
-                isRunning = true
-                gameThread = scope.launch {
-                    val targetFrameTimeMs = 16L
-                    while (isRunning && _gameState.value.phase == GamePhase.PLAYING) {
-                        val frameStart = System.currentTimeMillis()
-                        updateGame()
-                        renderFrame()
-                        val elapsed = System.currentTimeMillis() - frameStart
-                        val sleepTime = targetFrameTimeMs - elapsed
-                        if (sleepTime > 0) delay(sleepTime)
-                    }
-                }
-            }
-
-            if (audioSyncManager != null) {
-                audioSyncManager.play { launchGameLoop() }
-            } else {
-                launchGameLoop()
-            }
+            audioSyncManager?.resume()
         }
     }
 
@@ -417,7 +500,9 @@ class GameEngine(
 
     fun stopGame() {
         isRunning = false
-        gameThread?.cancel()
+        gameThread?.interrupt()
+        try { gameThread?.join(500) } catch (_: Exception) {}
+        gameThread = null
         audioSyncManager?.release()
         scope.cancel()
     }

@@ -12,7 +12,6 @@ class NoteManager(
     private val activeNotes = mutableListOf<ActiveNote>()
     private val lock = Any()
 
-    // Hit windows in milliseconds
     companion object {
         const val PERFECT_WINDOW_MS = 100L
         const val GREAT_WINDOW_MS = 200L
@@ -36,21 +35,16 @@ class NoteManager(
 
             // Update positions for all active notes
             for (activeNote in activeNotes) {
-                // Keep updating y for all notes, even if hit or missed, 
-                // so they can eventually fall off-screen and be removed.
                 val noteTimeMs = activeNote.note.timeMs
                 val progress = (currentTimeMs - (noteTimeMs - approachTimeMs)).toFloat() / approachTimeMs.toFloat()
                 activeNote.y = progress * hitLineY
 
-                // Mark missed notes: only if not already hit or marked as miss
+                // Mark missed notes
                 if (!activeNote.isHit && activeNote.hitResult == null && currentTimeMs > noteTimeMs + MISS_THRESHOLD_MS) {
                     activeNote.isHit = true
                     activeNote.hitResult = HitResult.MISS
                 }
             }
-
-            // Capture the state BEFORE removal for the engine to process
-            val resultList = activeNotes.toList()
 
             // Remove notes that have scrolled past and been resolved
             activeNotes.removeAll { note ->
@@ -58,23 +52,34 @@ class NoteManager(
                 isResolved && note.y > hitLineY + 800f
             }
 
-            return resultList
+            // Return direct reference - caller must not modify
+            return activeNotes.toList()
         }
     }
 
+    /**
+     * Allocation-free hit detection: manual loop instead of filter+sort.
+     */
     fun tryHit(lane: Int, currentTimeMs: Long): Pair<HitResult, ActiveNote?>? {
         synchronized(lock) {
-            val candidates = activeNotes
-                .filter { !it.isHit && it.note.lane == lane }
-                .sortedBy { kotlin.math.abs(it.note.timeMs - currentTimeMs) }
+            var bestTarget: ActiveNote? = null
+            var bestDiff = Long.MAX_VALUE
 
-            val target = candidates.firstOrNull() ?: return null
-            val diff = kotlin.math.abs(target.note.timeMs - currentTimeMs)
+            for (note in activeNotes) {
+                if (note.isHit || note.note.lane != lane) continue
+                val diff = kotlin.math.abs(note.note.timeMs - currentTimeMs)
+                if (diff < bestDiff) {
+                    bestDiff = diff
+                    bestTarget = note
+                }
+            }
+
+            val target = bestTarget ?: return null
 
             val result = when {
-                diff <= PERFECT_WINDOW_MS -> HitResult.PERFECT
-                diff <= GREAT_WINDOW_MS -> HitResult.GREAT
-                diff <= GOOD_WINDOW_MS -> HitResult.GOOD
+                bestDiff <= PERFECT_WINDOW_MS -> HitResult.PERFECT
+                bestDiff <= GREAT_WINDOW_MS -> HitResult.GREAT
+                bestDiff <= GOOD_WINDOW_MS -> HitResult.GOOD
                 else -> return null
             }
 
@@ -87,22 +92,15 @@ class NoteManager(
 
     fun releaseHold(lane: Int) {
         synchronized(lock) {
-            activeNotes
-                .filter { it.note.lane == lane && it.note.isHold && it.isActive }
-                .forEach { it.isActive = false }
+            for (note in activeNotes) {
+                if (note.note.lane == lane && note.note.isHold && note.isActive) {
+                    note.isActive = false
+                }
+            }
         }
     }
-
-    fun getActiveNotes(): List<ActiveNote> = synchronized(lock) { activeNotes.toList() }
 
     fun getTotalNotes(): Int = notes.size
-
-    fun allNotesProcessed(currentTimeMs: Long): Boolean {
-        synchronized(lock) {
-            return nextNoteIndex >= notes.size &&
-                activeNotes.all { it.isHit || it.hitResult == HitResult.MISS }
-        }
-    }
 
     fun reset() {
         synchronized(lock) {

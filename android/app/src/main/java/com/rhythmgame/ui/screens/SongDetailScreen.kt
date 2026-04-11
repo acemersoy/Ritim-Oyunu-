@@ -3,16 +3,15 @@ package com.rhythmgame.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,6 +28,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rhythmgame.data.model.Song
 import com.rhythmgame.data.repository.SongRepository
+import com.rhythmgame.ui.components.*
+import com.rhythmgame.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -65,30 +66,11 @@ class SongDetailViewModel @Inject constructor(
     }
 }
 
-// -- Design colors --
-private val ScreenBackground = Color(0xFF0A0A1A)
-private val CardBackground = Color(0xFF14142B)
-private val EasyColor = Color(0xFF4ADE80)
-private val MediumColor = Color(0xFFA855F7)
-private val HardColor = Color(0xFFEF4444)
-private val CyanAccent = Color(0xFF22D3EE)
-private val GoldColor = Color(0xFFFFD700)
-private val GradientPink = Color(0xFFE040FB)
-private val GradientPurple = Color(0xFF7C3AED)
-private val SubtleGray = Color(0xFF9CA3AF)
-
-private fun difficultyDotColor(difficulty: String): Color = when (difficulty) {
-    "easy" -> EasyColor
-    "medium" -> MediumColor
-    "hard" -> HardColor
-    else -> Color.White
-}
-
-private fun difficultyTextColor(difficulty: String): Color = when (difficulty) {
-    "easy" -> EasyColor
-    "medium" -> MediumColor
-    "hard" -> HardColor
-    else -> Color.White
+private fun difficultyColor(difficulty: String): Color = when (difficulty) {
+    "easy" -> DesignTokens.Difficulty.Easy
+    "medium" -> DesignTokens.Difficulty.Medium
+    "hard" -> DesignTokens.Difficulty.Hard
+    else -> DesignTokens.Text.Primary
 }
 
 private fun formatScore(score: Int): String {
@@ -102,343 +84,218 @@ fun SongDetailScreen(
     onBack: () -> Unit,
     viewModel: SongDetailViewModel = hiltViewModel(),
 ) {
-    LaunchedEffect(songId) {
-        viewModel.loadSong(songId)
-    }
+    LaunchedEffect(songId) { viewModel.loadSong(songId) }
 
     val song by viewModel.song.collectAsState()
     val isDeleted by viewModel.isDeleted.collectAsState()
+    val colors = LocalAppColors.current
     var selectedDifficulty by remember { mutableStateOf("medium") }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(isDeleted) {
-        if (isDeleted) onBack()
-    }
+    LaunchedEffect(isDeleted) { if (isDeleted) onBack() }
 
-    // Delete confirmation dialog
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Delete Song", color = Color.White) },
-            text = { Text("Bu şarkıyı silmek istediğinize emin misiniz?", color = SubtleGray) },
-            containerColor = CardBackground,
+            title = { Text("Sarkiyi Sil", color = colors.textMain) },
+            text = { Text("Bu sarkiyi silmek istediginizden emin misiniz?", color = colors.textMuted) },
+            containerColor = colors.cardGlass,
             confirmButton = {
-                TextButton(onClick = {
-                    viewModel.deleteSong(songId)
-                    showDeleteDialog = false
-                }) {
-                    Text("Delete", color = HardColor)
+                TextButton(onClick = { viewModel.deleteSong(songId); showDeleteDialog = false }) {
+                    Text("Sil", color = colors.accentRed)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) {
-                    Text("Cancel", color = SubtleGray)
+                    Text("Iptal", color = colors.textMuted)
                 }
             },
         )
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(ScreenBackground)
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        ThemedBackground(modifier = Modifier.fillMaxSize())
+
         if (song == null) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator(color = GradientPink)
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = colors.primary)
             }
             return@Box
         }
 
         val currentSong = song!!
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-        ) {
-            // ---- TOP BAR ----
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Top bar
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .statusBarsPadding() // Apply padding here to push content down
-                    .padding(top = 8.dp, bottom = 8.dp)
-                    .height(56.dp) // Increased height for better touch targets
+                    .statusBarsPadding()
+                    .padding(top = 4.dp, bottom = 4.dp)
+                    .height(48.dp)
             ) {
                 IconButton(
                     onClick = onBack,
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .padding(start = 8.dp)
-                        .size(48.dp) // Large touch target
+                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 8.dp).size(44.dp)
                 ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Color.White,
-                        modifier = Modifier.size(28.dp)
-                    )
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = colors.textMain, modifier = Modifier.size(26.dp))
                 }
                 Text(
-                    text = "SONG DETAILS",
-                    color = Color.White,
-                    fontSize = 18.sp,
+                    text = "SARKI DETAY",
+                    color = colors.textMain,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
+                    fontFamily = SpaceGroteskFontFamily,
                     modifier = Modifier.align(Alignment.Center)
                 )
             }
 
-            // ---- ALBUM ART ----
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .height(200.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(GradientPink, GradientPurple)
-                        )
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Default.MusicNote,
-                    contentDescription = null,
-                    modifier = Modifier.size(72.dp),
-                    tint = Color.White.copy(alpha = 0.9f),
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // ---- SONG NAME ----
-            Text(
-                text = currentSong.filename
-                    .removeSuffix(".mp3")
-                    .removeSuffix(".m4a")
-                    .removeSuffix(".wav")
-                    .removeSuffix(".ogg")
-                    .removeSuffix(".flac"),
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // ---- ARTIST NAME (placeholder) ----
-            Text(
-                text = "Unknown Artist",
-                fontSize = 14.sp,
-                color = MediumColor,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // ---- INFO ROW (BPM + DURATION) ----
+            // ── Body: square cover on left, difficulty + start on right ──────
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // BPM
-                if (currentSong.bpm != null) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(horizontal = 24.dp)
+                // ── Left: square album art + song info ──────────────────────
+                Column(
+                    modifier = Modifier.fillMaxHeight(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(DesignTokens.radiusLarge))
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        colors.primary.copy(alpha = 0.35f),
+                                        colors.primaryGlow.copy(alpha = 0.15f),
+                                        colors.cardBg,
+                                    )
+                                )
+                            ),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            text = "BPM",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = SubtleGray,
-                            letterSpacing = 1.sp,
+                        Icon(
+                            Icons.Default.MusicNote,
+                            contentDescription = null,
+                            modifier = Modifier.size(72.dp),
+                            tint = colors.primary.copy(alpha = 0.8f),
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(CyanAccent)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "${currentSong.bpm!!.toInt()}",
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                            )
+                    }
+
+                    // Song title
+                    Text(
+                        text = currentSong.filename
+                            .removeSuffix(".mp3").removeSuffix(".m4a")
+                            .removeSuffix(".wav").removeSuffix(".ogg").removeSuffix(".flac"),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = SpaceGroteskFontFamily,
+                        color = colors.textMain,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                    )
+
+                    // BPM · SURE inline
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (currentSong.bpm != null) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(colors.primary))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    "${currentSong.bpm!!.toInt()} BPM",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = ManropeFontFamily,
+                                    color = colors.textMuted,
+                                )
+                            }
+                        }
+                        if (currentSong.durationMs != null) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(colors.primary))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                val min = currentSong.durationMs!! / 60000
+                                val sec = (currentSong.durationMs!! % 60000) / 1000
+                                Text(
+                                    "$min:${String.format("%02d", sec)}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = ManropeFontFamily,
+                                    color = colors.textMuted,
+                                )
+                            }
                         }
                     }
                 }
 
-                // DURATION
-                if (currentSong.durationMs != null) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(horizontal = 24.dp)
-                    ) {
-                        Text(
-                            text = "DURATION",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = SubtleGray,
-                            letterSpacing = 1.sp,
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(CyanAccent)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            val min = currentSong.durationMs!! / 60000
-                            val sec = (currentSong.durationMs!! % 60000) / 1000
-                            Text(
-                                text = "$min:${String.format("%02d", sec)}",
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            // ---- SELECT DIFFICULTY HEADER ----
-            Text(
-                text = "SELECT DIFFICULTY",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = SubtleGray,
-                letterSpacing = 2.sp,
-                modifier = Modifier.padding(horizontal = 20.dp)
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // ---- DIFFICULTY ROWS ----
-            Column(
-                modifier = Modifier.padding(horizontal = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                DifficultyRow(
-                    label = "EASY",
-                    difficulty = "easy",
-                    highScore = currentSong.highScoreEasy,
-                    selected = selectedDifficulty == "easy",
-                    onClick = { selectedDifficulty = "easy" },
-                )
-                DifficultyRow(
-                    label = "MEDIUM",
-                    difficulty = "medium",
-                    highScore = currentSong.highScoreMedium,
-                    selected = selectedDifficulty == "medium",
-                    onClick = { selectedDifficulty = "medium" },
-                )
-                DifficultyRow(
-                    label = "HARD",
-                    difficulty = "hard",
-                    highScore = currentSong.highScoreHard,
-                    selected = selectedDifficulty == "hard",
-                    onClick = { selectedDifficulty = "hard" },
-                )
-            }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            // ---- START PERFORMANCE BUTTON ----
-            val isReady = currentSong.status == "ready"
-            val isProcessing = currentSong.status in listOf("processing", "analyzing", "converting")
-            val isError = currentSong.status == "error"
-
-            val buttonText = when {
-                isReady -> "START PERFORMANCE"
-                isProcessing -> "ANALYZING..."
-                isError -> "ANALYSIS FAILED"
-                else -> "UNAVAILABLE"
-            }
-
-            val buttonColor = when {
-                isReady -> GoldColor
-                isError -> HardColor
-                else -> SubtleGray
-            }
-
-            Button(
-                onClick = { if (isReady) onPlayClick(selectedDifficulty) },
-                enabled = isReady || isError, // Allow clicking on error to maybe see details or just show it's failed
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 24.dp)
-                    .height(56.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = buttonColor,
-                    contentColor = if (isReady) Color.Black else Color.White,
-                    disabledContainerColor = SubtleGray.copy(alpha = 0.5f),
-                    disabledContentColor = Color.White.copy(alpha = 0.5f),
-                ),
-                shape = RoundedCornerShape(16.dp),
-            ) {
-                if (isProcessing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = Color.White,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                } else if (isReady) {
-                    Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                } else if (isError) {
-                    Icon(
-                        Icons.Default.EmojiEvents, // Warning icon would be better but using available
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                
-                Text(
-                    text = buttonText,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-            
-            // Show error message if exists
-            if (isError && !currentSong.errorMessage.isNullOrEmpty()) {
-                Text(
-                    text = "Error: ${currentSong.errorMessage}",
-                    color = HardColor,
-                    fontSize = 12.sp,
-                    textAlign = TextAlign.Center,
+                // ── Right: difficulty selection + start button ─────────────
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
-                        .padding(bottom = 16.dp)
-                )
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "ZORLUK SEC",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = ManropeFontFamily,
+                            color = colors.primary,
+                            letterSpacing = 2.sp,
+                        )
+                        DifficultyRow("KOLAY", "easy", currentSong.highScoreEasy, selectedDifficulty == "easy") { selectedDifficulty = "easy" }
+                        DifficultyRow("ORTA", "medium", currentSong.highScoreMedium, selectedDifficulty == "medium") { selectedDifficulty = "medium" }
+                        DifficultyRow("ZOR", "hard", currentSong.highScoreHard, selectedDifficulty == "hard") { selectedDifficulty = "hard" }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Start button
+                    val isReady = currentSong.status == "ready"
+                    val isProcessing = currentSong.status in listOf("processing", "analyzing", "converting")
+                    val isError = currentSong.status == "error"
+
+                    val buttonText = when {
+                        isReady -> "BASLA"
+                        isProcessing -> "ANALIZ EDILIYOR..."
+                        isError -> "ANALIZ BASARISIZ"
+                        else -> "KULLANILAMIYOR"
+                    }
+
+                    Column {
+                        ThemedButton(
+                            text = buttonText,
+                            onClick = { if (isReady) onPlayClick(selectedDifficulty) },
+                            isPrimary = true,
+                            height = 60.dp,
+                            fontSize = 18.sp,
+                            enabled = isReady,
+                            icon = if (isReady) Icons.Default.PlayArrow else null,
+                        )
+                        if (isError && !currentSong.errorMessage.isNullOrEmpty()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Hata: ${currentSong.errorMessage}",
+                                color = colors.accentRed,
+                                fontSize = 11.sp,
+                                fontFamily = ManropeFontFamily,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -452,83 +309,46 @@ private fun DifficultyRow(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val dotColor = difficultyDotColor(difficulty)
-    val textColor = difficultyTextColor(difficulty)
-    val borderColor = if (selected) textColor.copy(alpha = 0.7f) else Color.Transparent
+    val colors = LocalAppColors.current
+    val color = difficultyColor(difficulty)
+    val bgColor = if (selected) colors.cardGlass else colors.containerLow
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp)
+            .height(48.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
-        color = CardBackground,
-        border = if (selected) {
-            androidx.compose.foundation.BorderStroke(1.5.dp, borderColor)
-        } else {
-            null
-        },
+        color = bgColor,
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Colored dot
             Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(dotColor)
+                modifier = Modifier.width(3.dp).height(24.dp)
+                    .clip(RoundedCornerShape(2.dp)).background(color)
             )
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            // Difficulty label
-            Text(
-                text = label,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = textColor,
-            )
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            // High score with trophy
-            if (highScore > 0) {
-                Icon(
-                    Icons.Default.EmojiEvents,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = GoldColor,
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "BEST: ${formatScore(highScore)}",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GoldColor,
-                )
-            } else {
-                Text(
-                    text = "BEST: --",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = SubtleGray,
-                )
+            Spacer(modifier = Modifier.width(10.dp))
+            Row {
+                val starCount = when (difficulty) { "easy" -> 1; "medium" -> 3; "hard" -> 5; else -> 1 }
+                repeat(starCount) {
+                    Icon(Icons.Default.Star, null, modifier = Modifier.size(11.dp), tint = color)
+                }
             }
-
             Spacer(modifier = Modifier.width(8.dp))
-
-            // Chevron right
-            Icon(
-                Icons.Default.ChevronRight,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = SubtleGray,
-            )
+            Text(label, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = ManropeFontFamily, color = color)
+            Spacer(modifier = Modifier.weight(1f))
+            if (highScore > 0) {
+                Icon(Icons.Default.EmojiEvents, null, modifier = Modifier.size(14.dp), tint = colors.accentGold)
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("EN IYI: ${formatScore(highScore)}", fontSize = 11.sp, fontWeight = FontWeight.Medium, fontFamily = ManropeFontFamily, color = colors.accentGold)
+            } else {
+                Text("EN IYI: --", fontSize = 11.sp, fontWeight = FontWeight.Medium, fontFamily = ManropeFontFamily, color = colors.textDisabled)
+            }
+            Spacer(modifier = Modifier.width(6.dp))
+            Icon(Icons.Default.ChevronRight, null, modifier = Modifier.size(18.dp), tint = colors.textDisabled)
         }
     }
 }

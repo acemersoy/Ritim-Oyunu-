@@ -38,7 +38,10 @@ import com.rhythmgame.game.AudioSyncManager
 import com.rhythmgame.game.GameEngine
 import com.rhythmgame.game.GamePhase
 import com.rhythmgame.game.GameState
+import com.rhythmgame.ui.theme.DesignTokens
+import com.rhythmgame.ui.theme.SpaceGroteskFontFamily
 import com.rhythmgame.util.AudioCalibration
+import com.rhythmgame.util.GamePreferences
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,16 +50,18 @@ import java.text.NumberFormat
 import java.util.Locale
 import javax.inject.Inject
 
-// ── Colors ──────────────────────────────────────────────────────────────────────
-private val NeonPurple = Color(0xFFBB86FC)
-private val NeonCyan = Color(0xFF00E5FF)
-private val SuccessGreen = Color(0xFF22C55E)
+// ── Stage Colors for Pause Overlay ──────────────────────────────────────────
+private val FireOrange = DesignTokens.Stage.FireOrange
+private val FireYellow = DesignTokens.Stage.FireYellow
+private val FlameRed = DesignTokens.Stage.FlameRed
+private val DarkChrome = DesignTokens.Stage.DarkChrome
 
 // ── View Model ──────────────────────────────────────────────────────────────────
 @HiltViewModel
 class GameViewModel @Inject constructor(
     private val repository: SongRepository,
     private val calibration: AudioCalibration,
+    private val gamePreferences: GamePreferences,
 ) : ViewModel() {
 
     private val _chart = MutableStateFlow<Chart?>(null)
@@ -75,6 +80,7 @@ class GameViewModel @Inject constructor(
     val error = _error.asStateFlow()
 
     val audioOffsetMs: Long get() = calibration.offsetMs
+    val gameScreenStyle: String get() = gamePreferences.gameScreenStyle
 
     fun loadChart(songId: String, difficulty: String) {
         viewModelScope.launch {
@@ -119,7 +125,7 @@ private fun formatScore(score: Int): String {
 fun GameScreen(
     songId: String,
     difficulty: String,
-    onGameFinished: (score: Int, maxCombo: Int, perfect: Int, great: Int, good: Int, miss: Int) -> Unit,
+    onGameFinished: (score: Int, maxCombo: Int, perfect: Int, great: Int, good: Int, miss: Int, overpress: Int) -> Unit,
     onBack: () -> Unit,
     onRestart: () -> Unit = {},
     viewModel: GameViewModel = hiltViewModel(),
@@ -145,7 +151,7 @@ fun GameScreen(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(64.dp),
-                    color = NeonPurple,
+                    color = FireOrange,
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text("Loading chart...", fontSize = 18.sp, color = Color.White)
@@ -162,13 +168,13 @@ fun GameScreen(
             contentAlignment = Alignment.Center,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Error: $error", color = Color(0xFFFF5252))
+                Text("Error: $error", color = FlameRed)
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
                     onClick = onBack,
-                    colors = ButtonDefaults.buttonColors(containerColor = NeonPurple),
+                    colors = ButtonDefaults.buttonColors(containerColor = FireOrange),
                 ) {
-                    Text("Go Back")
+                    Text("Go Back", color = Color.Black)
                 }
             }
         }
@@ -178,14 +184,13 @@ fun GameScreen(
     val currentChart = chart ?: return
 
     var gameEngine by remember { mutableStateOf<GameEngine?>(null) }
+    var audioSync by remember { mutableStateOf<AudioSyncManager?>(null) }
     var isPaused by remember { mutableStateOf(false) }
 
-    // Collect game state from engine
     val gameStateValue by remember(gameEngine) {
         gameEngine?.gameState ?: MutableStateFlow(GameState())
     }.collectAsState()
 
-    // Song display name
     val displayName = song?.filename
         ?.removeSuffix(".mp3")
         ?.removeSuffix(".m4a")
@@ -194,7 +199,6 @@ fun GameScreen(
         ?.removeSuffix(".flac")
         ?: "Unknown"
 
-    // Back button pauses the game instead of navigating away
     BackHandler(enabled = !isPaused) {
         gameEngine?.pauseGame()
         isPaused = true
@@ -203,6 +207,9 @@ fun GameScreen(
     DisposableEffect(currentChart) {
         onDispose {
             gameEngine?.stopGame()
+            if (gameEngine == null) {
+                audioSync?.release()
+            }
         }
     }
 
@@ -211,16 +218,18 @@ fun GameScreen(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
-                val audioSync = AudioSyncManager(ctx).apply {
+                val syncManager = AudioSyncManager(ctx).apply {
                     setAudioOffset(viewModel.audioOffsetMs)
                     audioUri?.let { loadAudio(it) }
                 }
+                audioSync = syncManager
 
                 GameEngine(
                     context = ctx,
                     chart = currentChart,
-                    audioSyncManager = audioSync,
+                    audioSyncManager = syncManager,
                     audioOffsetMs = viewModel.audioOffsetMs,
+                    gameScreenStyle = viewModel.gameScreenStyle,
                     onGameFinished = { state ->
                         viewModel.saveScore(songId, difficulty, state.score)
                         onGameFinished(
@@ -230,6 +239,7 @@ fun GameScreen(
                             state.greatCount,
                             state.goodCount,
                             state.missCount,
+                            state.overpressCount,
                         )
                     },
                 ).also { engine ->
@@ -261,102 +271,71 @@ fun GameScreen(
             }
         }
 
-        // ── Pause overlay ──────────────────────────────────────────────────────
+        // ── Pause overlay (landscape-optimized) ────────────────────────────────
         if (isPaused) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.85f)),
+                    .background(Color.Black.copy(alpha = 0.88f))
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
             ) {
-                Column(modifier = Modifier.fillMaxSize()) {
+                // ── Top header row: Score · Progress · Combo ───────────────────
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text(
+                            "SCORE",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color.White.copy(alpha = 0.4f),
+                            letterSpacing = 3.sp,
+                        )
+                        Text(
+                            formatScore(gameStateValue.score),
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Black,
+                            fontStyle = FontStyle.Italic,
+                            color = FireOrange,
+                        )
+                    }
 
-                    // ── Header: Score, Combo, Progress ─────────────────────────
                     Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .statusBarsPadding()
-                            .padding(horizontal = 28.dp, vertical = 24.dp),
+                            .weight(1f)
+                            .padding(horizontal = 24.dp),
                     ) {
-                        // Score + Combo row
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Column {
-                                Text(
-                                    "SCORE",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Black,
-                                    color = Color.White.copy(alpha = 0.4f),
-                                    letterSpacing = 3.sp,
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    formatScore(gameStateValue.score),
-                                    fontSize = 28.sp,
-                                    fontWeight = FontWeight.Black,
-                                    fontStyle = FontStyle.Italic,
-                                    color = Color.White,
-                                )
-                            }
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(
-                                    "COMBO",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Black,
-                                    color = Color.White.copy(alpha = 0.4f),
-                                    letterSpacing = 3.sp,
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    "x${gameStateValue.combo}",
-                                    fontSize = 36.sp,
-                                    fontWeight = FontWeight.Black,
-                                    fontStyle = FontStyle.Italic,
-                                    color = NeonPurple,
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        // Progress labels
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
                                 formatTime(gameStateValue.currentTimeMs),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Black,
-                                color = Color.White.copy(alpha = 0.3f),
-                                letterSpacing = 2.sp,
-                            )
-                            Text(
-                                "SONG PROGRESS",
-                                fontSize = 10.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Black,
                                 color = Color.White.copy(alpha = 0.3f),
                                 letterSpacing = 2.sp,
                             )
                             Text(
                                 formatTime(gameStateValue.songDurationMs),
-                                fontSize = 10.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Black,
                                 color = Color.White.copy(alpha = 0.3f),
                                 letterSpacing = 2.sp,
                             )
                         }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Progress bar
+                        Spacer(modifier = Modifier.height(4.dp))
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(8.dp)
-                                .clip(RoundedCornerShape(4.dp))
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp))
                                 .background(Color.White.copy(alpha = 0.1f)),
                         ) {
                             val progress = if (gameStateValue.songDurationMs > 0) {
@@ -368,44 +347,135 @@ fun GameScreen(
                                     modifier = Modifier
                                         .fillMaxHeight()
                                         .fillMaxWidth(progress)
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(NeonPurple),
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                listOf(FireYellow, FireOrange, FlameRed)
+                                            )
+                                        ),
                                 )
                             }
                         }
                     }
 
-                    // ── Center: PAUSED + Buttons + Song Card ───────────────────
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            "COMBO",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color.White.copy(alpha = 0.4f),
+                            letterSpacing = 3.sp,
+                        )
+                        Text(
+                            "x${gameStateValue.combo}",
+                            fontSize = 26.sp,
+                            fontWeight = FontWeight.Black,
+                            fontStyle = FontStyle.Italic,
+                            color = FireYellow,
+                        )
+                    }
+                }
+
+                // ── Center body: two columns (info | actions) ──────────────────
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 64.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Left: PAUSED title + song card
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .fillMaxWidth()
-                            .padding(horizontal = 40.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
+                            .fillMaxHeight(),
                         verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.Start,
                     ) {
-                        // PAUSED text
                         Text(
                             "PAUSED",
-                            fontSize = 64.sp,
+                            fontSize = 48.sp,
                             fontWeight = FontWeight.Black,
                             fontStyle = FontStyle.Italic,
                             color = Color.White,
                             letterSpacing = 4.sp,
+                            fontFamily = SpaceGroteskFontFamily,
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        // Purple underline
+                        Spacer(modifier = Modifier.height(8.dp))
                         Box(
                             modifier = Modifier
-                                .width(120.dp)
-                                .height(6.dp)
+                                .width(100.dp)
+                                .height(5.dp)
                                 .clip(RoundedCornerShape(3.dp))
-                                .background(NeonPurple),
+                                .background(
+                                    Brush.horizontalGradient(
+                                        listOf(FireYellow, FireOrange, FlameRed)
+                                    )
+                                ),
                         )
+                        Spacer(modifier = Modifier.height(20.dp))
 
-                        Spacer(modifier = Modifier.height(48.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    DarkChrome.copy(alpha = 0.8f),
+                                    RoundedCornerShape(14.dp),
+                                )
+                                .border(
+                                    1.dp,
+                                    DesignTokens.Stage.SteelGray.copy(alpha = 0.3f),
+                                    RoundedCornerShape(14.dp),
+                                )
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        Brush.linearGradient(listOf(FireOrange, FireYellow)),
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Default.MusicNote,
+                                    contentDescription = null,
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    displayName,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontStyle = FontStyle.Italic,
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    "Unknown Artist",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White.copy(alpha = 0.4f),
+                                    letterSpacing = 2.sp,
+                                )
+                            }
+                        }
+                    }
 
-                        // Resume button - green
+                    // Right: Resume / Restart / Quit buttons stacked
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        // Resume button - fire gradient
                         Button(
                             onClick = {
                                 isPaused = false
@@ -413,29 +483,46 @@ fun GameScreen(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(72.dp),
-                            shape = RoundedCornerShape(16.dp),
+                                .height(56.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(0.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = SuccessGreen,
+                                containerColor = Color.Transparent,
                                 contentColor = Color.Black,
                             ),
                         ) {
-                            Icon(
-                                Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                modifier = Modifier.size(32.dp),
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                "RESUME",
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.Black,
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            listOf(FireYellow, FireOrange, FlameRed.copy(alpha = 0.8f))
+                                        ),
+                                        RoundedCornerShape(14.dp),
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.PlayArrow,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(26.dp),
+                                        tint = Color.Black,
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        "RESUME",
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = Color.Black,
+                                    )
+                                }
+                            }
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
-                        // Restart button - dark glass
+                        // Restart button - chrome/steel
                         Button(
                             onClick = {
                                 gameEngine?.stopGame()
@@ -443,30 +530,30 @@ fun GameScreen(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(72.dp),
-                            shape = RoundedCornerShape(16.dp),
+                                .height(56.dp),
+                            shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.White.copy(alpha = 0.1f),
+                                containerColor = DarkChrome,
                                 contentColor = Color.White,
                             ),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                            border = BorderStroke(1.dp, DesignTokens.Stage.SteelGray.copy(alpha = 0.5f)),
                         ) {
                             Icon(
                                 Icons.Default.Refresh,
                                 contentDescription = null,
-                                modifier = Modifier.size(28.dp),
+                                modifier = Modifier.size(22.dp),
                             )
-                            Spacer(modifier = Modifier.width(12.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
                             Text(
                                 "RESTART",
-                                fontSize = 22.sp,
+                                fontSize = 18.sp,
                                 fontWeight = FontWeight.Black,
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
-                        // Quit button - outlined
+                        // Quit button - outlined with red hint
                         OutlinedButton(
                             onClick = {
                                 gameEngine?.stopGame()
@@ -474,105 +561,31 @@ fun GameScreen(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(60.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                                .height(48.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, FlameRed.copy(alpha = 0.3f)),
                             colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = Color.White.copy(alpha = 0.6f),
+                                contentColor = FlameRed.copy(alpha = 0.7f),
                             ),
                         ) {
                             Text(
                                 "QUIT",
-                                fontSize = 18.sp,
+                                fontSize = 16.sp,
                                 fontWeight = FontWeight.Black,
                             )
                         }
-
-                        Spacer(modifier = Modifier.height(32.dp))
-
-                        // Song info card
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    Color.White.copy(alpha = 0.05f),
-                                    RoundedCornerShape(16.dp),
-                                )
-                                .border(
-                                    1.dp,
-                                    Color.White.copy(alpha = 0.1f),
-                                    RoundedCornerShape(16.dp),
-                                )
-                                .padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            // Album art placeholder
-                            Box(
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(
-                                        Brush.linearGradient(listOf(NeonPurple, NeonCyan)),
-                                    ),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    Icons.Default.MusicNote,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(28.dp),
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(16.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    displayName,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Black,
-                                    fontStyle = FontStyle.Italic,
-                                    color = Color.White,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    "Unknown Artist",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White.copy(alpha = 0.4f),
-                                    letterSpacing = 2.sp,
-                                )
-                            }
-
-                            Icon(
-                                Icons.Default.Settings,
-                                contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.4f),
-                                modifier = Modifier.size(24.dp),
-                            )
-                        }
-                    }
-
-                    // ── Footer ─────────────────────────────────────────────────
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(horizontal = 28.dp, vertical = 24.dp),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "VER 2.4.0",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Black,
-                            color = Color.White.copy(alpha = 0.2f),
-                            letterSpacing = 4.sp,
-                        )
                     }
                 }
+
+                // ── Footer ─────────────────────────────────────────────────────
+                Text(
+                    "VER 2.4.0",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Black,
+                    color = Color.White.copy(alpha = 0.2f),
+                    letterSpacing = 4.sp,
+                    modifier = Modifier.align(Alignment.BottomEnd),
+                )
             }
         }
     }

@@ -9,14 +9,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.rhythmgame.ui.theme.LaneColors
+import com.rhythmgame.ui.theme.DesignTokens
 
 @Composable
 fun NoteView(
     lane: Int,
     modifier: Modifier = Modifier,
 ) {
-    val color = LaneColors.getOrElse(lane - 1) { Color.White }
+    val color = DesignTokens.Lane.colors.getOrElse(lane - 1) { Color.White }
 
     Canvas(modifier = modifier.size(48.dp, 24.dp)) {
         drawRoundRect(

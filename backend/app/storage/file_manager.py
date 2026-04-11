@@ -2,7 +2,9 @@ import os
 import uuid
 from pathlib import Path
 
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
+from app.config import settings
+
+UPLOAD_DIR = settings.UPLOAD_DIR
 
 
 def ensure_upload_dir():

@@ -361,3 +361,51 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# ========================================
+# Android
+# ========================================
+android/.gradle/
+android/.idea/
+android/app/build/
+android/build/
+*.apk
+*.aab
+*.hprof
+local.properties
+
+# ========================================
+# Backend (Python/FastAPI)
+# ========================================
+backend/.venv/
+backend/.env
+backend/rhythm_game.db
+backend/uploads/
+*.db-journal
+
+# ========================================
+# IDE / Editor
+# ========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ========================================
+# OS
+# ========================================
+.DS_Store
+Thumbs.db
+desktop.ini
+nul
+
+# ========================================
+# Project-specific temp files
+# ========================================
+.claude/
+pdf_content.txt
+pdf_output.txt
+pdf_output_utf8.txt
+tree_output.txt
+changes/

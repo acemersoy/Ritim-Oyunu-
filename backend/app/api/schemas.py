@@ -56,3 +56,33 @@ class SongListItem(BaseModel):
 
 class DeleteResponse(BaseModel):
     message: str
+
+
+class SyncScoreRequest(BaseModel):
+    user_id: str
+    username: str
+    song_id: str
+    score: int
+    accuracy: float
+    max_combo: int
+    difficulty: str
+    xp_earned: int
+
+
+class ProfileResponse(BaseModel):
+    user_id: str
+    username: str
+    level: int
+    total_xp: int
+    league: str
+    highest_score: int
+    rank: Optional[int] = None
+
+
+class LeaderboardEntry(BaseModel):
+    user_id: str
+    username: str
+    level: int
+    league: str
+    highest_score: int
+    rank: int

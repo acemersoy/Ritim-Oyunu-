@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.rhythmgame.data.local.AppDatabase
 import com.rhythmgame.data.local.ChartDao
 import com.rhythmgame.data.local.SongDao
+import com.rhythmgame.data.local.UserDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -24,7 +25,7 @@ object AppModule {
             AppDatabase::class.java,
             "rhythm_game_db"
         )
-            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
             .build()
     }
 
@@ -35,4 +36,8 @@ object AppModule {
     @Provides
     @Singleton
     fun provideChartDao(database: AppDatabase): ChartDao = database.chartDao()
+
+    @Provides
+    @Singleton
+    fun provideUserDao(database: AppDatabase): UserDao = database.userDao()
 }

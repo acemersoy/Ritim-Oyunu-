@@ -8,14 +8,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.rhythmgame.ui.theme.LaneColors
+import com.rhythmgame.ui.theme.DesignTokens
 
 @Composable
 fun LaneView(
     laneIndex: Int,
     modifier: Modifier = Modifier,
 ) {
-    val color = LaneColors.getOrElse(laneIndex) { Color.White }
+    val color = DesignTokens.Lane.colors.getOrElse(laneIndex) { Color.White }
 
     Canvas(
         modifier = modifier

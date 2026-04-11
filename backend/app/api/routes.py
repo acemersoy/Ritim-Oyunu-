@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import uuid
@@ -8,12 +9,13 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import delete as sql_delete
+from sqlalchemy import delete as sql_delete, func, desc
 from app.api.schemas import (
     UploadResponse, StatusResponse, ChartResponse, NoteResponse,
     ShareRequest, ShareResponse, DifficultyEnum, SongListItem, DeleteResponse,
+    SyncScoreRequest, ProfileResponse, LeaderboardEntry
 )
-from app.storage.database import get_session, SongRecord, ChartRecord, SongStatus
+from app.storage.database import get_session, SongRecord, ChartRecord, SongStatus, UserRecord, ScoreRecord
 from app.storage.file_manager import get_upload_path, get_wav_path, generate_song_id, cleanup_files
 from app.analysis.pipeline import analyze_audio
 
@@ -27,6 +29,8 @@ async def upload_song(
     session: AsyncSession = Depends(get_session),
 ):
     """Upload an audio file and start analysis."""
+    from app.config import settings
+
     allowed_extensions = {".mp3", ".wav", ".ogg", ".flac", ".m4a"}
     filename = file.filename or "unknown.mp3"
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -36,13 +40,51 @@ async def upload_song(
     song_id = generate_song_id()
     upload_path = get_upload_path(song_id, filename)
 
-    # Save uploaded file
-    content = await file.read()
-    with open(upload_path, "wb") as f:
-        f.write(content)
+    # Save uploaded file using streaming to avoid memory issues
+    file_hasher = hashlib.md5()
+    try:
+        total_size = 0
+        max_size = settings.max_upload_bytes
+        with open(upload_path, "wb") as f:
+            while chunk := await file.read(1024 * 1024):  # Read in 1MB chunks
+                total_size += len(chunk)
+                if total_size > max_size:
+                    f.close()
+                    os.remove(upload_path)
+                    raise HTTPException(
+                        413, f"File too large. Maximum: {settings.MAX_UPLOAD_MB}MB"
+                    )
+                f.write(chunk)
+                file_hasher.update(chunk)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Error saving file: {str(e)}")
+
+    file_hash = file_hasher.hexdigest()
+
+    # Check if same file was already analyzed (duplicate detection)
+    existing_stmt = select(SongRecord).where(
+        SongRecord.file_hash == file_hash,
+        SongRecord.status == SongStatus.READY.value,
+    )
+    existing_result = await session.execute(existing_stmt)
+    existing_song = existing_result.scalar_one_or_none()
+
+    if existing_song:
+        # Same file already analyzed — reuse existing charts
+        os.remove(upload_path)  # cleanup duplicate file
+        return UploadResponse(
+            song_id=existing_song.id,
+            status="ready",
+            message="Song already analyzed. Using cached results.",
+        )
 
     # Create database record
-    song = SongRecord(id=song_id, filename=filename, status=SongStatus.PROCESSING.value)
+    song = SongRecord(
+        id=song_id, filename=filename,
+        file_hash=file_hash, status=SongStatus.PROCESSING.value,
+    )
     session.add(song)
     await session.commit()
 
@@ -291,3 +333,115 @@ async def delete_song(
     cleanup_files(song_id)
 
     return DeleteResponse(message="Song deleted")
+
+
+@router.post("/sync-score", response_model=ProfileResponse)
+async def sync_score(
+    req: SyncScoreRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Sync a game result and update user profile/rank."""
+    from datetime import datetime, timezone
+
+    # 1. Get or Create User
+    stmt = select(UserRecord).where(UserRecord.id == req.user_id)
+    result = await session.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    if not user:
+        user = UserRecord(id=req.user_id, username=req.username)
+        session.add(user)
+
+    # 2. Add Score Record
+    new_score = ScoreRecord(
+        user_id=req.user_id,
+        song_id=req.song_id,
+        score=req.score,
+        accuracy=req.accuracy,
+        max_combo=req.max_combo,
+        difficulty=req.difficulty,
+    )
+    session.add(new_score)
+
+    # 3. Update User cumulative stats
+    user.total_xp += req.xp_earned
+    if req.score > user.highest_score:
+        user.highest_score = req.score
+    
+    # Simple Level Calculation (e.g., Level = XP / 1000 + 1)
+    user.level = (user.total_xp // 1000) + 1
+    
+    # League Logic
+    leagues = ["Bronz", "Gümüş", "Altın", "Platin", "Elmas"]
+    user.league = leagues[min(user.level // 5, len(leagues) - 1)]
+    user.last_sync = datetime.now(timezone.utc)
+
+    await session.commit()
+    await session.refresh(user)
+
+    # Calculate Rank (simplified for this call)
+    rank_stmt = select(func.count(UserRecord.id)).where(UserRecord.total_xp > user.total_xp)
+    rank_result = await session.execute(rank_stmt)
+    rank = rank_result.scalar() + 1
+
+    return ProfileResponse(
+        user_id=user.id,
+        username=user.username,
+        level=user.level,
+        total_xp=user.total_xp,
+        league=user.league,
+        highest_score=user.highest_score,
+        rank=rank
+    )
+
+
+@router.get("/profile/{user_id}", response_model=ProfileResponse)
+async def get_profile(
+    user_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Get global user profile and rank."""
+    stmt = select(UserRecord).where(UserRecord.id == user_id)
+    result = await session.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    # Get Rank
+    rank_stmt = select(func.count(UserRecord.id)).where(UserRecord.total_xp > user.total_xp)
+    rank_result = await session.execute(rank_stmt)
+    rank = rank_result.scalar() + 1
+
+    return ProfileResponse(
+        user_id=user.id,
+        username=user.username,
+        level=user.level,
+        total_xp=user.total_xp,
+        league=user.league,
+        highest_score=user.highest_score,
+        rank=rank,
+    )
+
+
+@router.get("/leaderboard", response_model=list[LeaderboardEntry])
+async def get_leaderboard(
+    limit: int = 50,
+    session: AsyncSession = Depends(get_session),
+):
+    """Get global top players."""
+    stmt = select(UserRecord).order_by(desc(UserRecord.total_xp)).limit(limit)
+    result = await session.execute(stmt)
+    users = result.scalars().all()
+
+    return [
+        LeaderboardEntry(
+            user_id=u.id,
+            username=u.username,
+            level=u.level,
+            league=u.league,
+            highest_score=u.highest_score,
+            rank=i + 1
+        )
+        for i, u in enumerate(users)
+    ]

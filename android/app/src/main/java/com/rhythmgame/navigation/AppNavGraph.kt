@@ -43,6 +43,24 @@ fun AppNavGraph(navController: NavHostController) {
                 onUploadClick = { navController.navigate(NavRoutes.UPLOAD) },
                 onSongClick = { songId -> navController.navigate(NavRoutes.songDetail(songId)) },
                 onSettingsClick = { navController.navigate(NavRoutes.SETTINGS) },
+                onPlayClick = { navController.navigate(NavRoutes.SONG_LIST) },
+                onRankedClick = { navController.navigate(NavRoutes.RANKED) },
+                onProfileClick = { navController.navigate(NavRoutes.PROFILE) },
+                onMultiplayerClick = { navController.navigate(NavRoutes.MULTIPLAYER) },
+                onStoreClick = { navController.navigate(NavRoutes.STORE) },
+            )
+        }
+
+        composable(
+            NavRoutes.SONG_LIST,
+            enterTransition = { enterTransition },
+            exitTransition = { exitTransition },
+            popEnterTransition = { popEnterTransition },
+            popExitTransition = { popExitTransition },
+        ) {
+            SongListScreen(
+                onSongClick = { songId -> navController.navigate(NavRoutes.songDetail(songId)) },
+                onBack = { navController.popBackStack() },
             )
         }
 
@@ -71,6 +89,54 @@ fun AppNavGraph(navController: NavHostController) {
             popExitTransition = { popExitTransition },
         ) {
             SettingsScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            NavRoutes.RANKED,
+            enterTransition = { enterTransition },
+            exitTransition = { exitTransition },
+            popEnterTransition = { popEnterTransition },
+            popExitTransition = { popExitTransition },
+        ) {
+            RankedScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            NavRoutes.PROFILE,
+            enterTransition = { enterTransition },
+            exitTransition = { exitTransition },
+            popEnterTransition = { popEnterTransition },
+            popExitTransition = { popExitTransition },
+        ) {
+            ProfileScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            NavRoutes.MULTIPLAYER,
+            enterTransition = { enterTransition },
+            exitTransition = { exitTransition },
+            popEnterTransition = { popEnterTransition },
+            popExitTransition = { popExitTransition },
+        ) {
+            MultiplayerScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            NavRoutes.STORE,
+            enterTransition = { enterTransition },
+            exitTransition = { exitTransition },
+            popEnterTransition = { popEnterTransition },
+            popExitTransition = { popExitTransition },
+        ) {
+            StoreScreen(
                 onBack = { navController.popBackStack() },
             )
         }
@@ -107,9 +173,9 @@ fun AppNavGraph(navController: NavHostController) {
             GameScreen(
                 songId = songId,
                 difficulty = difficulty,
-                onGameFinished = { score, maxCombo, perfect, great, good, miss ->
+                onGameFinished = { score, maxCombo, perfect, great, good, miss, overpress ->
                     navController.navigate(
-                        NavRoutes.result(songId, difficulty, score, maxCombo, perfect, great, good, miss)
+                        NavRoutes.result(songId, difficulty, score, maxCombo, perfect, great, good, miss, overpress)
                     ) {
                         popUpTo(NavRoutes.songDetail(songId))
                     }
@@ -134,6 +200,7 @@ fun AppNavGraph(navController: NavHostController) {
                 navArgument("great") { type = NavType.IntType },
                 navArgument("good") { type = NavType.IntType },
                 navArgument("miss") { type = NavType.IntType },
+                navArgument("overpress") { type = NavType.IntType; defaultValue = 0 },
             ),
             enterTransition = { fadeIn(tween(600)) + scaleIn(tween(600), initialScale = 0.8f) },
             exitTransition = { fadeOut(tween(300)) },
@@ -150,6 +217,7 @@ fun AppNavGraph(navController: NavHostController) {
                 great = args.getInt("great"),
                 good = args.getInt("good"),
                 miss = args.getInt("miss"),
+                overpress = args.getInt("overpress"),
                 onPlayAgain = { selectedDifficulty ->
                     navController.navigate(NavRoutes.game(songId, selectedDifficulty)) {
                         popUpTo(NavRoutes.songDetail(songId))

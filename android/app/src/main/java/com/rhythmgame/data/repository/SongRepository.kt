@@ -17,6 +17,9 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -38,8 +41,12 @@ class SongRepository @Inject constructor(
      * 3. Poll for status until Ready
      * 4. Download and save charts
      */
-    suspend fun importSong(context: Context, uri: Uri): String = withContext(Dispatchers.IO) {
-        val tempId = UUID.randomUUID().toString() // Temporary local ID until server responds
+    /**
+     * Import a song. Returns Pair(songId, alreadyReady).
+     * If the server detects a duplicate file, alreadyReady=true and charts are downloaded immediately.
+     */
+    suspend fun importSong(context: Context, uri: Uri): Pair<String, Boolean> = withContext(Dispatchers.IO) {
+        val tempId = UUID.randomUUID().toString()
         val filename = getFileName(context, uri)
 
         // Create app-private directories
@@ -67,39 +74,61 @@ class SongRepository @Inject constructor(
             // Upload to Server
             val requestFile = localAudioFile.asRequestBody("audio/*".toMediaTypeOrNull())
             val body = MultipartBody.Part.createFormData("file", filename, requestFile)
-            
+
             val uploadResponse = api.uploadSong(body)
             val serverSongId = uploadResponse.song_id
+            val alreadyReady = uploadResponse.status == "ready"
 
-            // Update local ID to match Server ID (Critical for consistency)
-            // Note: Since Room doesn't support changing PrimaryKey easily, we might need to delete and re-insert
-            // OR we just use the server ID from the start if we could. 
-            // Better approach: Update the existing record with the new ID? No, PK is immutable.
-            // Strategy: Delete temp record, Insert new record with Server ID.
-            
             // Rename local directory to match server ID
             val newSongDir = File(songsDir, serverSongId)
-            if (songDir.renameTo(newSongDir)) {
-                // Update file path reference
-                val newAudioPath = File(newSongDir, filename).absolutePath
-                
-                songDao.deleteSong(initialSong)
-                
-                val processingSong = initialSong.copy(
-                    songId = serverSongId,
-                    status = "analyzing",
-                    localAudioPath = newAudioPath
-                )
-                songDao.insertSong(processingSong)
-                
-                return@withContext serverSongId
+            // If dir already exists (duplicate), reuse it
+            if (newSongDir.exists() && newSongDir != songDir) {
+                songDir.deleteRecursively()
             } else {
-                throw Exception("Failed to rename song directory")
+                songDir.renameTo(newSongDir)
             }
 
+            val newAudioPath = File(newSongDir, filename).let {
+                if (it.exists()) it.absolutePath else localAudioFile.absolutePath
+            }
+
+            songDao.deleteSong(initialSong)
+
+            val savedSong = initialSong.copy(
+                songId = serverSongId,
+                status = if (alreadyReady) "ready" else "analyzing",
+                localAudioPath = newAudioPath,
+            )
+            songDao.insertSong(savedSong)
+
+            if (alreadyReady) {
+                // Download charts immediately since they're already cached
+                downloadCharts(serverSongId, savedSong)
+            }
+
+            return@withContext Pair(serverSongId, alreadyReady)
+
         } catch (e: Exception) {
-            songDao.updateSong(initialSong.copy(status = "error", errorMessage = e.message))
-            throw e
+            val userMessage = toUserFriendlyMessage(e)
+            songDao.updateSong(initialSong.copy(status = "error", errorMessage = userMessage))
+            throw Exception(userMessage, e)
+        }
+    }
+
+    private suspend fun downloadCharts(songId: String, song: Song) {
+        val gson = Gson()
+        for (diff in listOf("easy", "medium", "hard")) {
+            try {
+                val chartResponse = api.getChart(songId, diff)
+                chartDao.insertChart(
+                    ChartEntity(songId = songId, difficulty = diff, chartJson = gson.toJson(chartResponse))
+                )
+                if (diff == "medium") {
+                    songDao.updateSong(
+                        song.copy(status = "ready", bpm = chartResponse.bpm, durationMs = chartResponse.duration_ms)
+                    )
+                }
+            } catch (_: Exception) { }
         }
     }
 
@@ -108,7 +137,7 @@ class SongRepository @Inject constructor(
      */
     suspend fun analyzeSong(context: Context, songId: String): Unit = withContext(Dispatchers.IO) {
         var retries = 0
-        val maxRetries = 60 // 60 * 2s = 2 minutes timeout
+        val maxRetries = 180 // 180 * 2s = 6 minutes timeout (Demucs + Basic Pitch CPU analysis)
         
         while (retries < maxRetries) {
             try {
@@ -157,7 +186,7 @@ class SongRepository @Inject constructor(
                         return@withContext
                     }
                     "error" -> {
-                        throw Exception(status.message ?: "Server analysis failed")
+                        throw Exception(status.message ?: "Sunucu analiz sirasinda hata olustu")
                     }
                     else -> {
                         // Still processing
@@ -174,10 +203,10 @@ class SongRepository @Inject constructor(
         
         // Timeout
         val song = songDao.getSongById(songId)
-        song?.let { 
-            songDao.updateSong(it.copy(status = "error", errorMessage = "Analysis timed out")) 
+        song?.let {
+            songDao.updateSong(it.copy(status = "error", errorMessage = "Analiz zaman asimina ugradi"))
         }
-        throw Exception("Analysis timed out")
+        throw Exception("Analiz zaman asimina ugradi. Daha sonra tekrar deneyin.")
     }
 
     /**
@@ -237,5 +266,18 @@ class SongRepository @Inject constructor(
             }
         }
         return name
+    }
+
+    private fun toUserFriendlyMessage(e: Exception): String {
+        val cause = e.cause ?: e
+        return when (cause) {
+            is ConnectException ->
+                "Sunucuya baglanılamadı. Sunucu adresi ve internet baglantınızı kontrol edin."
+            is UnknownHostException ->
+                "Sunucu adresi bulunamadı. Ayarlardan sunucu adresini kontrol edin."
+            is SocketTimeoutException ->
+                "Sunucu yanıt vermedi (zaman asımı). Daha sonra tekrar deneyin."
+            else -> e.message ?: "Bilinmeyen hata olustu"
+        }
     }
 }

@@ -85,6 +85,13 @@ class AudioSyncManager(context: Context) {
         }
     }
 
+    fun resume() {
+        mainHandler.post {
+            player.play()
+            startPositionUpdates()
+        }
+    }
+
     fun stop() {
         mainHandler.post {
             player.stop()

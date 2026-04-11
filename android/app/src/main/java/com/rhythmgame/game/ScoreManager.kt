@@ -8,6 +8,7 @@ class ScoreManager {
     private var greatCount = 0
     private var goodCount = 0
     private var missCount = 0
+    private var overpressCount = 0
     private var _powerMultiplier = 1f
 
     val comboMultiplier: Float
@@ -44,6 +45,12 @@ class ScoreManager {
         return points
     }
 
+    @Synchronized
+    fun onOverpress() {
+        combo = 0
+        overpressCount++
+    }
+
     fun getScore() = score
     fun getCombo() = combo
     fun getMaxCombo() = maxCombo
@@ -51,6 +58,7 @@ class ScoreManager {
     fun getGreatCount() = greatCount
     fun getGoodCount() = goodCount
     fun getMissCount() = missCount
+    fun getOverpressCount() = overpressCount
     fun setPowerMultiplier(multiplier: Float) { _powerMultiplier = multiplier }
     fun getPowerMultiplier() = _powerMultiplier
 
@@ -62,6 +70,7 @@ class ScoreManager {
         greatCount = 0
         goodCount = 0
         missCount = 0
+        overpressCount = 0
         _powerMultiplier = 1f
     }
 }
