@@ -8,7 +8,7 @@ import com.rhythmgame.data.model.Song
 
 @Database(
     entities = [Song::class, ChartEntity::class, ProfileEntity::class, GameResultEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -80,6 +80,13 @@ abstract class AppDatabase : RoomDatabase() {
                 try {
                     db.execSQL("ALTER TABLE profile ADD COLUMN maxEnergy INTEGER NOT NULL DEFAULT 120")
                 } catch (_: Exception) {}
+            }
+        }
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE songs ADD COLUMN isFavorite INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE songs ADD COLUMN lastPlayedAt INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

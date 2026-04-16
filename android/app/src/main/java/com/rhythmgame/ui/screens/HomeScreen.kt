@@ -32,6 +32,7 @@ fun HomeScreen(
     onProfileClick: () -> Unit = {},
     onMultiplayerClick: () -> Unit = {},
     onStoreClick: () -> Unit = {},
+    onRecordClick: () -> Unit = {},
     viewModel: HomeViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
 ) {
     val colors = LocalAppColors.current
@@ -66,14 +67,14 @@ fun HomeScreen(
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 32.dp, vertical = 24.dp),
+                .padding(start = 32.dp, end = 32.dp, top = 56.dp, bottom = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(28.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Left column: primary actions
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 GuitarButton(
                     imageRes = com.rhythmgame.R.drawable.btn_oyna,
@@ -92,7 +93,7 @@ fun HomeScreen(
             // Right column: store + profile, with inline badges
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Box(modifier = Modifier.fillMaxWidth()) {
                     GuitarButton(
@@ -122,6 +123,19 @@ fun HomeScreen(
                     )
                 }
             }
+        }
+
+        // ── Floating record button (bottom-right corner) ─────────────────────
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 20.dp, bottom = 16.dp)
+                .fillMaxWidth(0.22f),
+        ) {
+            GuitarButton(
+                imageRes = com.rhythmgame.R.drawable.btn_kayit,
+                onClick = onRecordClick,
+            )
         }
     }
 }

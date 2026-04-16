@@ -15,4 +15,6 @@ data class Song(
     val highScoreHard: Int = 0,
     val localAudioPath: String? = null,
     val errorMessage: String? = null,
+    val isFavorite: Boolean = false,
+    val lastPlayedAt: Long = 0L,
 )

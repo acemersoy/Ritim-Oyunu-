@@ -9,6 +9,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.rhythmgame.ui.screens.*
+import java.net.URLDecoder
 
 private val enterTransition: EnterTransition = fadeIn(tween(300)) + slideInHorizontally(tween(300)) { it / 4 }
 private val exitTransition: ExitTransition = fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { -it / 4 }
@@ -48,6 +49,7 @@ fun AppNavGraph(navController: NavHostController) {
                 onProfileClick = { navController.navigate(NavRoutes.PROFILE) },
                 onMultiplayerClick = { navController.navigate(NavRoutes.MULTIPLAYER) },
                 onStoreClick = { navController.navigate(NavRoutes.STORE) },
+                onRecordClick = { navController.navigate(NavRoutes.RECORD) },
             )
         }
 
@@ -73,6 +75,45 @@ fun AppNavGraph(navController: NavHostController) {
         ) {
             UploadScreen(
                 onUploadComplete = { songId ->
+                    navController.navigate(NavRoutes.songDetail(songId)) {
+                        popUpTo(NavRoutes.HOME)
+                    }
+                },
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            NavRoutes.RECORD,
+            enterTransition = { enterTransition },
+            exitTransition = { exitTransition },
+            popEnterTransition = { popEnterTransition },
+            popExitTransition = { popExitTransition },
+        ) {
+            RecordScreen(
+                onRecordingDone = { filePath ->
+                    navController.navigate(NavRoutes.audioEdit(filePath)) {
+                        popUpTo(NavRoutes.RECORD) { inclusive = true }
+                    }
+                },
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            route = NavRoutes.AUDIO_EDIT,
+            arguments = listOf(navArgument("filePath") { type = NavType.StringType }),
+            enterTransition = { enterTransition },
+            exitTransition = { exitTransition },
+            popEnterTransition = { popEnterTransition },
+            popExitTransition = { popExitTransition },
+        ) { backStackEntry ->
+            val filePath = backStackEntry.arguments?.getString("filePath")?.let {
+                URLDecoder.decode(it, "UTF-8")
+            } ?: return@composable
+            AudioEditScreen(
+                filePath = filePath,
+                onAnalysisComplete = { songId ->
                     navController.navigate(NavRoutes.songDetail(songId)) {
                         popUpTo(NavRoutes.HOME)
                     }

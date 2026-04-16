@@ -60,10 +60,22 @@ fun SongListScreen(
     var searchQuery by remember { mutableStateOf("") }
     var activeFilter by remember { mutableStateOf(SongFilter.ALL) }
 
-    val filteredSongs = songs.filter { song ->
-        val matchesSearch = searchQuery.isBlank() || song.filename.contains(searchQuery, ignoreCase = true)
-        matchesSearch
-    }
+    val filteredSongs = songs
+        .filter { song ->
+            val matchesSearch = searchQuery.isBlank() || song.filename.contains(searchQuery, ignoreCase = true)
+            val matchesFilter = when (activeFilter) {
+                SongFilter.ALL -> true
+                SongFilter.FAVORITE -> song.isFavorite
+                SongFilter.RECENT -> song.lastPlayedAt > 0L
+            }
+            matchesSearch && matchesFilter
+        }
+        .let { list ->
+            when (activeFilter) {
+                SongFilter.RECENT -> list.sortedByDescending { it.lastPlayedAt }
+                else -> list
+            }
+        }
 
     if (songToDelete != null) {
         AlertDialog(
@@ -300,6 +312,7 @@ fun SongListScreen(
                             song = song,
                             icon = songIcons[iconIndex],
                             onClick = { onSongClick(song.songId) },
+                            onToggleFavorite = { viewModel.toggleFavorite(song) },
                         )
                     }
                 }
@@ -313,6 +326,7 @@ private fun ThemedSongCard(
     song: Song,
     icon: ImageVector,
     onClick: () -> Unit,
+    onToggleFavorite: () -> Unit = {},
 ) {
     val colors = LocalAppColors.current
     val isReady = song.status == "ready"
@@ -413,7 +427,21 @@ private fun ThemedSongCard(
                 }
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+
+            IconButton(
+                onClick = onToggleFavorite,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    imageVector = if (song.isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = if (song.isFavorite) "Favoriden cikar" else "Favoriye ekle",
+                    tint = if (song.isFavorite) colors.accentRed else colors.textMuted,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
 
             when (song.status) {
                 "processing" -> CircularProgressIndicator(

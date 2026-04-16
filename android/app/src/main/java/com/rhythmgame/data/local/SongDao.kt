@@ -27,6 +27,12 @@ interface SongDao {
     @Query("UPDATE songs SET highScoreHard = :score WHERE songId = :songId AND highScoreHard < :score")
     suspend fun updateHighScoreHard(songId: String, score: Int)
 
+    @Query("UPDATE songs SET isFavorite = :favorite WHERE songId = :songId")
+    suspend fun setFavorite(songId: String, favorite: Boolean)
+
+    @Query("UPDATE songs SET lastPlayedAt = :timestamp WHERE songId = :songId")
+    suspend fun setLastPlayedAt(songId: String, timestamp: Long)
+
     @Delete
     suspend fun deleteSong(song: Song)
 }

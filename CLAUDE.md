@@ -67,9 +67,10 @@ Package root: `com.rhythmgame` under `android/app/src/main/java/com/rhythmgame/`
 
 - **DI** (Hilt): `di/NetworkModule.kt` provides Retrofit/OkHttp + `BASE_URL` from `BuildConfig`; `di/AppModule.kt` provides Room DB, DAOs, and the application-scoped `Context`.
 - **Data layer**: Repository pattern in `data/repository/SongRepository.kt` wraps Room (local cache) + Retrofit (remote). `data/worker/` holds WorkManager jobs for background sync/download.
-- **Navigation**: Compose Navigation with typed routes in `navigation/NavRoutes.kt` and the graph in `navigation/AppNavGraph.kt`. Screens: Splash → Home → (SongList | Upload | Settings | Ranked | Profile | Multiplayer | Store) → SongDetail → Game → Result.
+- **Navigation**: Compose Navigation with typed routes in `navigation/NavRoutes.kt` and the graph in `navigation/AppNavGraph.kt`. Screens: Splash → Home → (SongList | Upload | Record → AudioEdit | Settings | Ranked | Profile | Multiplayer | Store) → SongDetail → Game → Result.
 - **Single Activity**: `MainActivity` enables edge-to-edge, hides system bars with `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`, and re-hides on focus regain. The whole app is landscape-locked by manifest; `configChanges="orientation|screenSize|keyboardHidden"` prevents activity recreation on rotation.
-- **Landscape layouts**: `HomeScreen` is a 2-column `Row` (left: 3 primary buttons, right: store/profile with badges) — not scrollable. `SongDetailScreen` is also a 2-column `Row` (left: square aspect-ratio cover + song info, right: difficulty rows + start button) — no vertical scroll required. `GameScreen`'s pause overlay is a 2-column layout (left: PAUSED title + song card, right: Resume/Restart/Quit stack).
+- **Utilities** (`util/`): `AudioRecordingManager` (MediaRecorder wrapper for mic capture → `.m4a`), `WaveformExtractor` (MediaCodec decode → RMS amplitude list), `AudioTrimmer` (MediaMuxer lossless trim), `AudioConverter` (format conversion), `AudioCalibration`, `GamePreferences`.
+- **Landscape layouts**: `HomeScreen` is a 2-column `Row` (left: 3 primary buttons, right: record/store/profile with badges) — not scrollable. `SongDetailScreen` is also a 2-column `Row` (left: square aspect-ratio cover + song info, right: difficulty rows + start button) — no vertical scroll required. `GameScreen`'s pause overlay is a 2-column layout (left: PAUSED title + song card, right: Resume/Restart/Quit stack). `RecordScreen` and `AudioEditScreen` also use 2-column landscape layouts.
 
 ### Game Engine (`game/` package)
 The engine runs on a **dedicated `Thread` with `Thread.MAX_PRIORITY`** (not Choreographer) for uncapped frame rate. Key files:
@@ -94,17 +95,18 @@ The engine runs on a **dedicated `Thread` with `Thread.MAX_PRIORITY`** (not Chor
 
 ### UI Theme — "Guitar Hero / Stage Rock"
 - Design tokens centralized in `ui/theme/DesignTokens.kt`. The `DesignTokens.Stage` object holds the stage colors (`FireOrange`, `FireYellow`, `FlameRed`, `StageGold`, `DarkChrome`, `SteelGray`). The older `DesignTokens.Neon` object is kept because `GameRenderer` hardcodes lane colors against it.
-- Themed component library in `ui/components/StageComponents.kt` and `ui/components/CosmicComponents.kt`: `NebulaMenuBackground`, `MusicalNotesBackground`, `StageBackground`, `ThemedButton`, `ThemedWaveformBars`, `CurrencyBar`, `UserProfileHeader`, `GalaxySwirl`, `FlameEffect`, and `GuitarButton`.
+- Themed component library in `ui/components/StageComponents.kt` and `ui/components/CosmicComponents.kt`: `NebulaMenuBackground`, `MusicalNotesBackground`, `StageBackground`, `ThemedButton`, `ThemedWaveformBars`, `CurrencyBar`, `UserProfileHeader`, `GalaxySwirl`, `FlameEffect`, and `GuitarButton`. `WaveformView` in `ui/components/WaveformView.kt` is a reusable Canvas composable with draggable trim handles.
 - **`GuitarButton`** is the main-menu button pattern: it displays a pre-rendered PNG drawable (`res/drawable/btn_oyna.png`, `btn_sarki_ekle.png`, `btn_multi.png`, `btn_ranked.png`, `btn_magaza.png`, `btn_profil.png`) at `fillMaxWidth` with `ContentScale.FillWidth` and `alpha = 0.70f`. Text and icons are baked into the PNGs — do not overlay extra decoration. All PNGs were split from a single composite via alpha-bbox detection and keep their natural aspect ratios.
 - Fonts: `SpaceGroteskFontFamily` (display/headlines), `ManropeFontFamily` (body/labels).
 - `beveledSurface()` modifier provides the beveled chrome look on buttons/cards.
 
 ### Data Flow
-1. Upload: Android `UploadScreen` → `POST /upload` → backend saves audio and starts background analysis.
-2. Poll: Android → `GET /status/{songId}` until status becomes `ready` (`processing`/`analyzing`/`converting` are the transitional states).
-3. Play: Android → `GET /chart/{songId}?difficulty=medium` → returns a JSON note array.
-4. Game: `GameEngine` schedules notes, `GameRenderer` draws on the dedicated thread, `ScoreManager` tracks hits.
-5. Result: Score/combo/accuracy displayed on `ResultScreen` and saved via Room (`SongRepository.updateHighScore`).
+1. **Upload (file)**: Android `UploadScreen` → `POST /upload` → backend saves audio and starts background analysis.
+2. **Record**: `RecordScreen` → mic capture via `AudioRecordingManager` → `.m4a` file → `AudioEditScreen` → `WaveformExtractor` for visualization → `AudioTrimmer` for lossless trim → `repository.importSong()` → same upload/poll as step 1.
+3. Poll: Android → `GET /status/{songId}` until status becomes `ready` (`processing`/`analyzing`/`converting` are the transitional states).
+4. Play: Android → `GET /chart/{songId}?difficulty=medium` → returns a JSON note array.
+5. Game: `GameEngine` schedules notes, `GameRenderer` draws on the dedicated thread, `ScoreManager` tracks hits.
+6. Result: Score/combo/accuracy displayed on `ResultScreen` and saved via Room (`SongRepository.updateHighScore`).
 
 ## Game Design Constants
 - **5 lanes** mapped by log-frequency bands: 80–200, 200–400, 400–800, 800–1600, 1600–5000 Hz.
@@ -118,6 +120,7 @@ The engine runs on a **dedicated `Thread` with `Thread.MAX_PRIORITY`** (not Chor
 ## Key Conventions
 - All UI colors come from `DesignTokens` — never hardcoded in screens or components.
 - The result-screen nav route (`NavRoutes.result(...)`) carries every stat as a URL param: `songId, difficulty, score, maxCombo, perfect, great, good, miss, overpress`. Any change to game stats means updating both `NavRoutes.result()` and the `GameScreen.onGameFinished` 7-param callback.
+- The `AUDIO_EDIT` route carries `filePath` as a URL-encoded argument (`NavRoutes.audioEdit(filePath)`). The `AppNavGraph` decodes it with `URLDecoder`.
 - `GameState` is a `data class` flowing via `StateFlow` from `GameEngine` to Compose. Never mutate it from the UI — the engine is the sole writer.
 - When adding new drawing to `GameRenderer`, follow the "no per-frame allocation" rules above and derive sizes from `fretButtonRadius` / `screenHeight` so landscape scaling stays correct.
 - Landscape-only: do not reintroduce `verticalScroll` on primary screens (`HomeScreen`, `SongDetailScreen`). Fit content via 2-column layouts and tightened typography/heights.

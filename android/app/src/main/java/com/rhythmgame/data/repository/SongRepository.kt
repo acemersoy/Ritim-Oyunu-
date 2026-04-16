@@ -237,6 +237,14 @@ class SongRepository @Inject constructor(
         }
     }
 
+    suspend fun setFavorite(songId: String, favorite: Boolean) {
+        songDao.setFavorite(songId, favorite)
+    }
+
+    suspend fun markPlayed(songId: String, timestamp: Long = System.currentTimeMillis()) {
+        songDao.setLastPlayedAt(songId, timestamp)
+    }
+
     /**
      * Delete song: remove DB records + local files.
      */

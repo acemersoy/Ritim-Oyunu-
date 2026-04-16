@@ -38,6 +38,14 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun toggleFavorite(song: Song) {
+        viewModelScope.launch {
+            try {
+                repository.setFavorite(song.songId, !song.isFavorite)
+            } catch (_: Exception) { }
+        }
+    }
+
     fun getOffsetMs(): Long = calibration.offsetMs
 
     fun setOffsetMs(value: Long) {

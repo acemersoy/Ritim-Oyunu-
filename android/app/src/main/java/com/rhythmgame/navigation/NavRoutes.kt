@@ -1,10 +1,14 @@
 package com.rhythmgame.navigation
 
+import java.net.URLEncoder
+
 object NavRoutes {
     const val SPLASH = "splash"
     const val HOME = "home"
     const val SONG_LIST = "song_list"
     const val UPLOAD = "upload"
+    const val RECORD = "record"
+    const val AUDIO_EDIT = "audio_edit/{filePath}"
     const val SETTINGS = "settings"
     const val RANKED = "ranked"
     const val PROFILE = "profile"
@@ -15,6 +19,7 @@ object NavRoutes {
     const val RESULT = "result/{songId}/{difficulty}/{score}/{maxCombo}/{perfect}/{great}/{good}/{miss}/{overpress}"
 
     fun songDetail(songId: String) = "song_detail/$songId"
+    fun audioEdit(filePath: String) = "audio_edit/${URLEncoder.encode(filePath, "UTF-8")}"
     fun game(songId: String, difficulty: String) = "game/$songId/$difficulty"
     fun result(
         songId: String,

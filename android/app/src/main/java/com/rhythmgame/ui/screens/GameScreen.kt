@@ -90,6 +90,8 @@ class GameViewModel @Inject constructor(
                 _chart.value = repository.getChart(songId, difficulty)
                 _audioUri.value = repository.getAudioUri(songId)
                 _isLoading.value = false
+                // Record this play for the "RECENT" filter on the song list screen.
+                try { repository.markPlayed(songId) } catch (_: Exception) { }
             } catch (e: Exception) {
                 _error.value = e.message ?: "Failed to load chart"
                 _isLoading.value = false
