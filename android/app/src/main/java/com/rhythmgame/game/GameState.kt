@@ -8,7 +8,7 @@ enum class HitResult {
 }
 
 enum class GamePhase {
-    LOADING, COUNTDOWN, PLAYING, PAUSED, FINISHED
+    LOADING, COUNTDOWN, PLAYING, PAUSED, RESUME_COUNTDOWN, FINISHED
 }
 
 data class ActiveNote(
@@ -16,9 +16,10 @@ data class ActiveNote(
     var y: Float = -100f,
     var isHit: Boolean = false,
     var hitResult: HitResult? = null,
-    var isActive: Boolean = true,
+    var isActive: Boolean = false,
     var holdProgress: Float = 0f,
     var missReported: Boolean = false,
+    var holdStartTimeMs: Long = 0L,
 )
 
 data class HitEffect(
@@ -119,10 +120,12 @@ data class GameState(
     val particles: List<Particle> = emptyList(),
     val songDurationMs: Long = 0,
     val powerBarProgress: Float = 0f,
+    val powerBarCombo: Int = 0,
     val powerActive: Boolean = false,
     val powerMultiplier: Float = 1f,
     val powerRemainingMs: Long = 0,
     val powerDurationMs: Long = 0,
+    val particlesEnabled: Boolean = true,
 ) {
     val accuracy: Float
         get() {

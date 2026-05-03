@@ -118,7 +118,16 @@ fun SongDetailScreen(
 
         if (song == null) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = colors.primary)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = colors.primary)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        "Sarki yukleniyor...",
+                        fontSize = 14.sp,
+                        fontFamily = ManropeFontFamily,
+                        color = colors.textMuted,
+                    )
+                }
             }
             return@Box
         }
@@ -183,7 +192,7 @@ fun SongDetailScreen(
                     ) {
                         Icon(
                             Icons.Default.MusicNote,
-                            contentDescription = null,
+                            contentDescription = "Album art",
                             modifier = Modifier.size(72.dp),
                             tint = colors.primary.copy(alpha = 0.8f),
                         )

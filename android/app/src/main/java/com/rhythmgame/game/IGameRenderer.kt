@@ -12,4 +12,6 @@ interface IGameRenderer {
     fun getLaneColor(laneIndex: Int): Int
     fun getFretPosition(laneIndex: Int): Pair<Float, Float>
     fun getParticleDirection(laneIndex: Int): Pair<Float, Float>
+    /** Set the video background players. Normal is default; power plays during special mode. */
+    fun setVideoBackground(normal: VideoBackgroundPlayer?, power: VideoBackgroundPlayer?) {}
 }

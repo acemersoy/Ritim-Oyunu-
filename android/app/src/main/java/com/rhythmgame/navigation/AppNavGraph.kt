@@ -50,6 +50,9 @@ fun AppNavGraph(navController: NavHostController) {
                 onMultiplayerClick = { navController.navigate(NavRoutes.MULTIPLAYER) },
                 onStoreClick = { navController.navigate(NavRoutes.STORE) },
                 onRecordClick = { navController.navigate(NavRoutes.RECORD) },
+                onDailySongClick = { songId, difficulty ->
+                    navController.navigate(NavRoutes.game(songId, difficulty.ifEmpty { "medium" }))
+                },
             )
         }
 
@@ -76,7 +79,7 @@ fun AppNavGraph(navController: NavHostController) {
             UploadScreen(
                 onUploadComplete = { songId ->
                     navController.navigate(NavRoutes.songDetail(songId)) {
-                        popUpTo(NavRoutes.HOME)
+                        popUpTo(NavRoutes.UPLOAD) { inclusive = true }
                     }
                 },
                 onBack = { navController.popBackStack() },
@@ -92,9 +95,7 @@ fun AppNavGraph(navController: NavHostController) {
         ) {
             RecordScreen(
                 onRecordingDone = { filePath ->
-                    navController.navigate(NavRoutes.audioEdit(filePath)) {
-                        popUpTo(NavRoutes.RECORD) { inclusive = true }
-                    }
+                    navController.navigate(NavRoutes.audioEdit(filePath))
                 },
                 onBack = { navController.popBackStack() },
             )
@@ -261,7 +262,7 @@ fun AppNavGraph(navController: NavHostController) {
                 overpress = args.getInt("overpress"),
                 onPlayAgain = { selectedDifficulty ->
                     navController.navigate(NavRoutes.game(songId, selectedDifficulty)) {
-                        popUpTo(NavRoutes.songDetail(songId))
+                        popUpTo(NavRoutes.songDetail(songId)) { inclusive = false }
                     }
                 },
                 onHome = {

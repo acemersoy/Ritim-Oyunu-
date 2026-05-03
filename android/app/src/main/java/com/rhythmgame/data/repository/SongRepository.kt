@@ -3,6 +3,7 @@ package com.rhythmgame.data.repository
 import android.content.Context
 import android.net.Uri
 import com.google.gson.Gson
+import com.google.gson.JsonSyntaxException
 import com.rhythmgame.data.local.ChartDao
 import com.rhythmgame.data.local.ChartEntity
 import com.rhythmgame.data.local.SongDao
@@ -16,7 +17,9 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
+import retrofit2.HttpException
 import java.io.File
+import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -30,17 +33,38 @@ class SongRepository @Inject constructor(
     private val chartDao: ChartDao,
     private val api: RhythmGameApi,
 ) {
+    companion object {
+        private val gson = Gson()
+        private const val MAX_RETRIES = 3
+        private val RETRY_DELAYS = longArrayOf(1000L, 2000L, 4000L)
+    }
+
     fun getAllSongs(): Flow<List<Song>> = songDao.getAllSongs()
 
     suspend fun getSongById(songId: String): Song? = songDao.getSongById(songId)
 
     /**
-     * Import a song:
-     * 1. Copy file to app storage (for playback)
-     * 2. Upload to Server for analysis
-     * 3. Poll for status until Ready
-     * 4. Download and save charts
+     * Retry a suspending block with exponential backoff.
      */
+    private suspend fun <T> withRetry(block: suspend () -> T): T {
+        var lastException: Exception? = null
+        for (attempt in 0 until MAX_RETRIES) {
+            try {
+                return block()
+            } catch (e: Exception) {
+                lastException = e
+                // Don't retry on non-transient errors
+                if (e is JsonSyntaxException || (e is HttpException && e.code() in 400..499)) {
+                    throw Exception(toUserFriendlyMessage(e), e)
+                }
+                if (attempt < MAX_RETRIES - 1) {
+                    delay(RETRY_DELAYS[attempt])
+                }
+            }
+        }
+        throw Exception(toUserFriendlyMessage(lastException ?: Exception("Unknown error")), lastException)
+    }
+
     /**
      * Import a song. Returns Pair(songId, alreadyReady).
      * If the server detects a duplicate file, alreadyReady=true and charts are downloaded immediately.
@@ -71,11 +95,12 @@ class SongRepository @Inject constructor(
         songDao.insertSong(initialSong)
 
         try {
-            // Upload to Server
-            val requestFile = localAudioFile.asRequestBody("audio/*".toMediaTypeOrNull())
-            val body = MultipartBody.Part.createFormData("file", filename, requestFile)
-
-            val uploadResponse = api.uploadSong(body)
+            // Upload to Server with retry
+            val uploadResponse = withRetry {
+                val requestFile = localAudioFile.asRequestBody("audio/*".toMediaTypeOrNull())
+                val body = MultipartBody.Part.createFormData("file", filename, requestFile)
+                api.uploadSong(body)
+            }
             val serverSongId = uploadResponse.song_id
             val alreadyReady = uploadResponse.status == "ready"
 
@@ -116,10 +141,9 @@ class SongRepository @Inject constructor(
     }
 
     private suspend fun downloadCharts(songId: String, song: Song) {
-        val gson = Gson()
         for (diff in listOf("easy", "medium", "hard")) {
             try {
-                val chartResponse = api.getChart(songId, diff)
+                val chartResponse = withRetry { api.getChart(songId, diff) }
                 chartDao.insertChart(
                     ChartEntity(songId = songId, difficulty = diff, chartJson = gson.toJson(chartResponse))
                 )
@@ -134,30 +158,27 @@ class SongRepository @Inject constructor(
 
     /**
      * Poll status and download charts when ready.
+     * Uses progressive delay: 2s, 3s, 5s pattern.
      */
     suspend fun analyzeSong(context: Context, songId: String): Unit = withContext(Dispatchers.IO) {
         var retries = 0
-        val maxRetries = 180 // 180 * 2s = 6 minutes timeout (Demucs + Basic Pitch CPU analysis)
-        
+        val maxRetries = 180
+        val progressiveDelays = longArrayOf(2000L, 3000L, 5000L)
+
         while (retries < maxRetries) {
             try {
                 val status = api.getStatus(songId)
-                
+
                 when (status.status) {
                     "ready" -> {
                         // Download charts for all difficulties
-                        val gson = Gson()
                         val difficulties = listOf("easy", "medium", "hard")
-                        
+
                         for (diff in difficulties) {
                             try {
-                                val chartResponse = api.getChart(songId, diff)
-                                // Convert remote response to local model
-                                // We can reuse the same JSON structure or map it
-                                // Ideally, we map it. But ChartEntity stores JSON string.
-                                // Let's just store the response as JSON since it matches our expectations
+                                val chartResponse = withRetry { api.getChart(songId, diff) }
                                 val chartJson = gson.toJson(chartResponse)
-                                
+
                                 chartDao.insertChart(
                                     ChartEntity(
                                         songId = songId,
@@ -165,8 +186,7 @@ class SongRepository @Inject constructor(
                                         chartJson = chartJson
                                     )
                                 )
-                                
-                                // Update song metadata from the first chart we get
+
                                 if (diff == "medium") {
                                     val song = songDao.getSongById(songId)
                                     if (song != null) {
@@ -179,9 +199,7 @@ class SongRepository @Inject constructor(
                                         )
                                     }
                                 }
-                            } catch (e: Exception) {
-                                // Ignore missing difficulty if any
-                            }
+                            } catch (_: Exception) { }
                         }
                         return@withContext
                     }
@@ -189,18 +207,20 @@ class SongRepository @Inject constructor(
                         throw Exception(status.message ?: "Sunucu analiz sirasinda hata olustu")
                     }
                     else -> {
-                        // Still processing
-                        delay(2000)
+                        // Progressive delay
+                        val delayIndex = (retries / 10).coerceAtMost(progressiveDelays.size - 1)
+                        delay(progressiveDelays[delayIndex])
                         retries++
                     }
                 }
             } catch (e: Exception) {
-                // Network error, maybe retry a few times but count as wait
-                delay(2000)
+                if (e.message?.contains("Sunucu analiz") == true) throw e
+                val delayIndex = (retries / 10).coerceAtMost(progressiveDelays.size - 1)
+                delay(progressiveDelays[delayIndex])
                 retries++
             }
         }
-        
+
         // Timeout
         val song = songDao.getSongById(songId)
         song?.let {
@@ -210,12 +230,23 @@ class SongRepository @Inject constructor(
     }
 
     /**
-     * Get chart for a song and difficulty from local DB.
+     * Get chart for a song and difficulty.
+     * First checks local Room cache, falls back to API.
      */
     suspend fun getChart(songId: String, difficulty: String = "medium"): Chart {
+        // Check local cache first
         val entity = chartDao.getChart(songId, difficulty)
-            ?: throw Exception("Chart bulunamadi: $songId / $difficulty")
-        return Gson().fromJson(entity.chartJson, Chart::class.java)
+        if (entity != null) {
+            return gson.fromJson(entity.chartJson, Chart::class.java)
+        }
+
+        // Not cached — fetch from API and cache
+        val chartResponse = withRetry { api.getChart(songId, difficulty) }
+        val chartJson = gson.toJson(chartResponse)
+        chartDao.insertChart(
+            ChartEntity(songId = songId, difficulty = difficulty, chartJson = chartJson)
+        )
+        return gson.fromJson(chartJson, Chart::class.java)
     }
 
     /**
@@ -249,16 +280,13 @@ class SongRepository @Inject constructor(
      * Delete song: remove DB records + local files.
      */
     suspend fun deleteSong(context: Context, songId: String) {
-        // Delete charts from DB
         chartDao.deleteChartsForSong(songId)
 
-        // Delete song from DB
         val song = songDao.getSongById(songId)
         if (song != null) {
             songDao.deleteSong(song)
         }
 
-        // Delete local files
         val songDir = File(context.filesDir, "songs/$songId")
         if (songDir.exists()) {
             songDir.deleteRecursively()
@@ -280,11 +308,17 @@ class SongRepository @Inject constructor(
         val cause = e.cause ?: e
         return when (cause) {
             is ConnectException ->
-                "Sunucuya baglanılamadı. Sunucu adresi ve internet baglantınızı kontrol edin."
+                "Sunucuya baglanılamadı. Internet baglantınızı kontrol edin."
             is UnknownHostException ->
                 "Sunucu adresi bulunamadı. Ayarlardan sunucu adresini kontrol edin."
             is SocketTimeoutException ->
                 "Sunucu yanıt vermedi (zaman asımı). Daha sonra tekrar deneyin."
+            is HttpException ->
+                "Sunucu hatası (${cause.code()}). Daha sonra tekrar deneyin."
+            is JsonSyntaxException ->
+                "Sunucu yanıtı okunamadı. Daha sonra tekrar deneyin."
+            is IOException ->
+                "Baglantı hatası. Internet baglantınızı kontrol edin."
             else -> e.message ?: "Bilinmeyen hata olustu"
         }
     }

@@ -32,6 +32,7 @@ fun WaveformView(
     val activeEndColor = DesignTokens.Stage.FireOrange
     val inactiveColor = Color.White.copy(alpha = 0.15f)
     val handleColor = Color.White
+    val handleActiveColor = DesignTokens.Stage.FireYellow
     val playbackColor = DesignTokens.Stage.StageGold
     val trimOverlayColor = Color.Black.copy(alpha = 0.4f)
 
@@ -40,14 +41,21 @@ fun WaveformView(
     Canvas(
         modifier = modifier
             .fillMaxWidth()
-            .height(120.dp)
+            .height(140.dp)
             .pointerInput(trimStartFraction, trimEndFraction) {
                 detectDragGestures(
                     onDragStart = { offset ->
                         val fraction = offset.x / size.width
                         val distToStart = abs(fraction - trimStartFraction)
                         val distToEnd = abs(fraction - trimEndFraction)
-                        draggingHandle = if (distToStart < distToEnd) 0 else 1
+                        // Minimum threshold zone for handle detection
+                        val threshold = 0.04f
+                        draggingHandle = when {
+                            distToStart < threshold && distToStart < distToEnd -> 0
+                            distToEnd < threshold && distToEnd <= distToStart -> 1
+                            distToStart < distToEnd -> 0
+                            else -> 1
+                        }
                     },
                     onDragEnd = { draggingHandle = null },
                     onDragCancel = { draggingHandle = null },
@@ -122,35 +130,50 @@ fun WaveformView(
         // Trim handles - vertical dashed lines
         val handleWidth = 3f
         val dashEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f))
+        val startDragging = draggingHandle == 0
+        val endDragging = draggingHandle == 1
 
         // Start handle
         val startX = size.width * trimStartFraction
         drawLine(
-            color = handleColor,
+            color = if (startDragging) handleActiveColor else handleColor,
             start = Offset(startX, 0f),
             end = Offset(startX, size.height),
             strokeWidth = handleWidth,
             pathEffect = dashEffect,
         )
-        // Start handle circle
+        // Start handle - outer glow circle
         drawCircle(
-            color = handleColor,
-            radius = 8f,
+            color = (if (startDragging) handleActiveColor else handleColor).copy(alpha = 0.3f),
+            radius = 24f,
+            center = Offset(startX, size.height / 2),
+        )
+        // Start handle - inner circle
+        drawCircle(
+            color = if (startDragging) handleActiveColor else handleColor,
+            radius = 18f,
             center = Offset(startX, size.height / 2),
         )
 
         // End handle
         val endX = size.width * trimEndFraction
         drawLine(
-            color = handleColor,
+            color = if (endDragging) handleActiveColor else handleColor,
             start = Offset(endX, 0f),
             end = Offset(endX, size.height),
             strokeWidth = handleWidth,
             pathEffect = dashEffect,
         )
+        // End handle - outer glow circle
         drawCircle(
-            color = handleColor,
-            radius = 8f,
+            color = (if (endDragging) handleActiveColor else handleColor).copy(alpha = 0.3f),
+            radius = 24f,
+            center = Offset(endX, size.height / 2),
+        )
+        // End handle - inner circle
+        drawCircle(
+            color = if (endDragging) handleActiveColor else handleColor,
+            radius = 18f,
             center = Offset(endX, size.height / 2),
         )
 

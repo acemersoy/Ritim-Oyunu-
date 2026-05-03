@@ -29,10 +29,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rhythmgame.data.model.Chart
 import com.rhythmgame.data.model.Song
+import com.rhythmgame.data.repository.CurrencyRepository
 import com.rhythmgame.data.repository.SongRepository
 import com.rhythmgame.game.AudioSyncManager
 import com.rhythmgame.game.GameEngine
@@ -42,9 +46,11 @@ import com.rhythmgame.ui.theme.DesignTokens
 import com.rhythmgame.ui.theme.SpaceGroteskFontFamily
 import com.rhythmgame.util.AudioCalibration
 import com.rhythmgame.util.GamePreferences
+import com.rhythmgame.util.VibrationManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
 import java.util.Locale
@@ -62,6 +68,8 @@ class GameViewModel @Inject constructor(
     private val repository: SongRepository,
     private val calibration: AudioCalibration,
     private val gamePreferences: GamePreferences,
+    private val currencyRepository: CurrencyRepository,
+    val vibrationManager: VibrationManager,
 ) : ViewModel() {
 
     private val _chart = MutableStateFlow<Chart?>(null)
@@ -81,14 +89,35 @@ class GameViewModel @Inject constructor(
 
     val audioOffsetMs: Long get() = calibration.offsetMs
     val gameScreenStyle: String get() = gamePreferences.gameScreenStyle
+    val particlesEnabled: Boolean get() = gamePreferences.particlesEnabled
+    val musicVolume: Float get() = gamePreferences.musicVolume
 
     fun loadChart(songId: String, difficulty: String) {
         viewModelScope.launch {
             try {
                 _isLoading.value = true
+                _error.value = null
+
+                // Check energy first but don't consume yet
+                val currentEnergy = currencyRepository.energy.first()
+                if (currentEnergy <= 0) {
+                    val nextEnergyTime = currencyRepository.getNextEnergyTime()
+                    val remainingMs = (nextEnergyTime - System.currentTimeMillis()).coerceAtLeast(0)
+                    val minutes = remainingMs / 60_000
+                    val seconds = (remainingMs % 60_000) / 1000
+                    _error.value = "Enerji yok! %02d:%02d sonra yenilenecek".format(minutes, seconds)
+                    _isLoading.value = false
+                    return@launch
+                }
+
+                // Load chart + audio first
                 _song.value = repository.getSongById(songId)
                 _chart.value = repository.getChart(songId, difficulty)
                 _audioUri.value = repository.getAudioUri(songId)
+
+                // Only consume energy after successful load
+                currencyRepository.consumeEnergy()
+
                 _isLoading.value = false
                 // Record this play for the "RECENT" filter on the song list screen.
                 try { repository.markPlayed(songId) } catch (_: Exception) { }
@@ -170,13 +199,22 @@ fun GameScreen(
             contentAlignment = Alignment.Center,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Error: $error", color = FlameRed)
-                Spacer(modifier = Modifier.height(16.dp))
+                Text(error ?: "", color = FlameRed, fontSize = 16.sp)
+                Spacer(modifier = Modifier.height(20.dp))
                 Button(
-                    onClick = onBack,
+                    onClick = {
+                        viewModel.loadChart(songId, difficulty)
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = FireOrange),
                 ) {
-                    Text("Go Back", color = Color.Black)
+                    Text("Tekrar Dene", color = Color.Black)
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onBack,
+                    colors = ButtonDefaults.buttonColors(containerColor = DarkChrome),
+                ) {
+                    Text("Geri Don", color = Color.White)
                 }
             }
         }
@@ -193,6 +231,33 @@ fun GameScreen(
         gameEngine?.gameState ?: MutableStateFlow(GameState())
     }.collectAsState()
 
+    // Sync isPaused with game phase (e.g. auto-pause from surface loss / backgrounding)
+    LaunchedEffect(gameStateValue.phase) {
+        if (gameStateValue.phase == GamePhase.PAUSED && !isPaused) {
+            isPaused = true
+        }
+        if (gameStateValue.phase == GamePhase.RESUME_COUNTDOWN && isPaused) {
+            isPaused = false
+        }
+    }
+
+    // Auto-pause when app goes to background or screen is locked
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, gameEngine) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                val phase = gameEngine?.gameState?.value?.phase
+                if (phase == GamePhase.PLAYING || phase == GamePhase.COUNTDOWN || phase == GamePhase.RESUME_COUNTDOWN) {
+                    gameEngine?.pauseGame()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     val displayName = song?.filename
         ?.removeSuffix(".mp3")
         ?.removeSuffix(".m4a")
@@ -201,17 +266,20 @@ fun GameScreen(
         ?.removeSuffix(".flac")
         ?: "Unknown"
 
-    BackHandler(enabled = !isPaused) {
-        gameEngine?.pauseGame()
-        isPaused = true
+    BackHandler {
+        if (isPaused) {
+            gameEngine?.stopGame()
+            onBack()
+        } else {
+            gameEngine?.pauseGame()
+            isPaused = true
+        }
     }
 
     DisposableEffect(currentChart) {
         onDispose {
             gameEngine?.stopGame()
-            if (gameEngine == null) {
-                audioSync?.release()
-            }
+            audioSync?.release()
         }
     }
 
@@ -223,6 +291,7 @@ fun GameScreen(
                 val syncManager = AudioSyncManager(ctx).apply {
                     setAudioOffset(viewModel.audioOffsetMs)
                     audioUri?.let { loadAudio(it) }
+                    setVolume(viewModel.musicVolume)
                 }
                 audioSync = syncManager
 
@@ -232,6 +301,8 @@ fun GameScreen(
                     audioSyncManager = syncManager,
                     audioOffsetMs = viewModel.audioOffsetMs,
                     gameScreenStyle = viewModel.gameScreenStyle,
+                    particlesEnabled = viewModel.particlesEnabled,
+                    vibrationManager = viewModel.vibrationManager,
                     onGameFinished = { state ->
                         viewModel.saveScore(songId, difficulty, state.score)
                         onGameFinished(
@@ -294,7 +365,7 @@ fun GameScreen(
                     Column {
                         Text(
                             "SCORE",
-                            fontSize = 9.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Black,
                             color = Color.White.copy(alpha = 0.4f),
                             letterSpacing = 3.sp,
@@ -363,7 +434,7 @@ fun GameScreen(
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
                             "COMBO",
-                            fontSize = 9.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Black,
                             color = Color.White.copy(alpha = 0.4f),
                             letterSpacing = 3.sp,
@@ -460,11 +531,13 @@ fun GameScreen(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    "Unknown Artist",
+                                    difficulty.uppercase(),
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White.copy(alpha = 0.4f),
                                     letterSpacing = 2.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }

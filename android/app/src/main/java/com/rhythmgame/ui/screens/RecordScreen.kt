@@ -317,6 +317,14 @@ fun RecordScreen(
                                 fontFamily = ManropeFontFamily,
                                 lineHeight = 20.sp,
                             )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "Minimum 3 saniye kayit yapin",
+                                textAlign = TextAlign.Center,
+                                color = colors.textDisabled,
+                                fontSize = 11.sp,
+                                fontFamily = ManropeFontFamily,
+                            )
                         }
 
                         // Right: start button

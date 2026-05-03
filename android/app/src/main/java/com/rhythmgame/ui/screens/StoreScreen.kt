@@ -21,8 +21,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.rhythmgame.ui.components.*
 import com.rhythmgame.ui.theme.*
+import java.text.NumberFormat
+import java.util.Locale
 
 private enum class StoreTab(val label: String) {
     THEMES("TEMALAR"),
@@ -33,9 +36,56 @@ private enum class StoreTab(val label: String) {
 @Composable
 fun StoreScreen(
     onBack: () -> Unit,
+    viewModel: StoreViewModel = hiltViewModel(),
 ) {
     val colors = LocalAppColors.current
     var activeTab by remember { mutableStateOf(StoreTab.THEMES) }
+    val coins by viewModel.coins.collectAsState()
+    val purchaseResult by viewModel.purchaseResult.collectAsState()
+
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Purchase confirmation dialog
+    var pendingPurchaseItem by remember { mutableStateOf<StoreItem?>(null) }
+
+    if (pendingPurchaseItem != null) {
+        val item = pendingPurchaseItem!!
+        AlertDialog(
+            onDismissRequest = { pendingPurchaseItem = null },
+            title = { Text("Satin Al", fontFamily = SpaceGroteskFontFamily, fontWeight = FontWeight.Bold) },
+            text = {
+                Text("\"${item.name}\" ogesi ${item.price} coin'e satin alinsin mi?", fontFamily = ManropeFontFamily)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.purchaseItem(item.price)
+                    pendingPurchaseItem = null
+                }) { Text("Satin Al") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPurchaseItem = null }) { Text("Iptal") }
+            },
+        )
+    }
+
+    // Handle purchase result
+    LaunchedEffect(purchaseResult) {
+        when (purchaseResult) {
+            PurchaseResult.SUCCESS -> {
+                snackbarHostState.showSnackbar("Basariyla satin alindi!")
+                viewModel.clearPurchaseResult()
+            }
+            PurchaseResult.INSUFFICIENT_FUNDS -> {
+                snackbarHostState.showSnackbar("Yetersiz bakiye!")
+                viewModel.clearPurchaseResult()
+            }
+            null -> {}
+        }
+    }
+
+    val formattedCoins = remember(coins) {
+        NumberFormat.getNumberInstance(Locale.US).format(coins)
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         ThemedBackground(modifier = Modifier.fillMaxSize())
@@ -94,7 +144,7 @@ fun StoreScreen(
                             Icon(Icons.Default.Paid, null, tint = colors.accentGold, modifier = Modifier.size(24.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                "2,450",
+                                formattedCoins,
                                 fontSize = 28.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = SpaceGroteskFontFamily,
@@ -103,13 +153,13 @@ fun StoreScreen(
                         }
                     }
                     ThemedButton(
-                        text = "SATIN AL",
-                        onClick = { },
+                        text = "REKLAM IZLE",
+                        onClick = { viewModel.addCoinsFromAd(10) },
                         isPrimary = true,
                         height = 40.dp,
                         fontSize = 12.sp,
-                        icon = Icons.Default.Add,
-                        modifier = Modifier.width(140.dp),
+                        icon = Icons.Default.PlayCircle,
+                        modifier = Modifier.width(150.dp),
                     )
                 }
             }
@@ -158,6 +208,7 @@ fun StoreScreen(
                             StoreItem("Neon Siber", "Yakinda", 1500, Icons.Default.Bolt, false),
                             StoreItem("Okyanus Derin", "Yakinda", 1500, Icons.Default.Water, false),
                         ),
+                        onItemClick = { item -> if (!item.owned && item.price > 0) pendingPurchaseItem = item },
                     )
                 }
                 StoreTab.EFFECTS -> {
@@ -168,6 +219,7 @@ fun StoreScreen(
                             StoreItem("Elektrik", "Hit efekti", 500, Icons.Default.ElectricBolt, false),
                             StoreItem("Gok Kusagi", "Kombo efekti", 1000, Icons.Default.FilterVintage, false),
                         ),
+                        onItemClick = { item -> if (!item.owned && item.price > 0) pendingPurchaseItem = item },
                     )
                 }
                 StoreTab.SKINS -> {
@@ -178,12 +230,18 @@ fun StoreScreen(
                             StoreItem("Buz Notalar", "Nota gorunumu", 800, Icons.Default.AcUnit, false),
                             StoreItem("Altin Notalar", "Nota gorunumu", 1200, Icons.Default.Star, false),
                         ),
+                        onItemClick = { item -> if (!item.owned && item.price > 0) pendingPurchaseItem = item },
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(40.dp))
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
 }
 
@@ -196,7 +254,7 @@ private data class StoreItem(
 )
 
 @Composable
-private fun StoreItemGrid(items: List<StoreItem>) {
+private fun StoreItemGrid(items: List<StoreItem>, onItemClick: (StoreItem) -> Unit = {}) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -211,6 +269,7 @@ private fun StoreItemGrid(items: List<StoreItem>) {
                 row.forEach { item ->
                     StoreItemCard(
                         item = item,
+                        onClick = { onItemClick(item) },
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -225,11 +284,14 @@ private fun StoreItemGrid(items: List<StoreItem>) {
 @Composable
 private fun StoreItemCard(
     item: StoreItem,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAppColors.current
 
-    GlassCard(modifier = modifier) {
+    GlassCard(
+        modifier = modifier.clickable(enabled = !item.owned && item.price > 0) { onClick() },
+    ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxWidth(),

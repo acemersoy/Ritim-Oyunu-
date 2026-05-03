@@ -2,6 +2,7 @@ package com.rhythmgame.di
 
 import android.content.Context
 import androidx.room.Room
+import com.rhythmgame.data.local.AchievementDao
 import com.rhythmgame.data.local.AppDatabase
 import com.rhythmgame.data.local.ChartDao
 import com.rhythmgame.data.local.SongDao
@@ -25,7 +26,7 @@ object AppModule {
             AppDatabase::class.java,
             "rhythm_game_db"
         )
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6)
             .build()
     }
 
@@ -40,4 +41,8 @@ object AppModule {
     @Provides
     @Singleton
     fun provideUserDao(database: AppDatabase): UserDao = database.userDao()
+
+    @Provides
+    @Singleton
+    fun provideAchievementDao(database: AppDatabase): AchievementDao = database.achievementDao()
 }

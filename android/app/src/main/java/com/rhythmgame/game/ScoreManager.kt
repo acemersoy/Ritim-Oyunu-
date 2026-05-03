@@ -11,15 +11,25 @@ class ScoreManager {
     private var overpressCount = 0
     private var _powerMultiplier = 1f
 
+    /** Discrete combo tiers: 1x / 2x / 3x / 4x */
     val comboMultiplier: Float
-        get() = 1.0f + (combo / 10) * 0.1f
+        get() = when {
+            combo >= 50 -> 4f
+            combo >= 30 -> 3f
+            combo >= 10 -> 2f
+            else -> 1f
+        }
+
+    /** Effective multiplier shown to player: combo tier * power multiplier */
+    val totalMultiplier: Float
+        get() = comboMultiplier * _powerMultiplier
 
     @Synchronized
     fun onHit(result: HitResult): Int {
         val basePoints = when (result) {
-            HitResult.PERFECT -> 300
-            HitResult.GREAT -> 200
-            HitResult.GOOD -> 100
+            HitResult.PERFECT -> 3
+            HitResult.GREAT -> 2
+            HitResult.GOOD -> 1
             HitResult.MISS -> 0
         }
 
@@ -39,8 +49,9 @@ class ScoreManager {
             else -> {}
         }
 
-        val multiplier = if (_powerMultiplier > 1f) _powerMultiplier else comboMultiplier.coerceAtMost(4.0f)
-        val points = (basePoints * multiplier).toInt()
+        // Combo tier * power multiplier stack multiplicatively
+        // e.g. 3x combo * 4x power = 12x total
+        val points = (basePoints * totalMultiplier).toInt()
         score += points
         return points
     }

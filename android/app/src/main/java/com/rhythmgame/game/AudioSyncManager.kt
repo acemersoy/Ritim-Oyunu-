@@ -26,9 +26,17 @@ class AudioSyncManager(context: Context) {
     private var positionUpdater: Runnable? = null
     private var startTimeMs: Long = 0L
     private var onPlaybackStarted: (() -> Unit)? = null
+    // Cache the position when playback ends to prevent fluctuation
+    private val endedPositionMs = AtomicLong(-1L)
 
     fun setAudioOffset(offset: Long) {
         offsetMs = offset
+    }
+
+    fun setVolume(volume: Float) {
+        mainHandler.post {
+            player.volume = volume.coerceIn(0f, 1f)
+        }
     }
 
     fun loadAudio(uri: Uri) {
@@ -107,9 +115,11 @@ class AudioSyncManager(context: Context) {
 
     /**
      * Thread-safe: can be called from game loop thread.
-     * Returns cached position + offset.
+     * Returns cached position + offset. After playback ends, returns a stable cached value.
      */
     fun getCurrentPositionMs(): Long {
+        val ended = endedPositionMs.get()
+        if (ended >= 0) return ended
         return cachedPositionMs.get() + offsetMs
     }
 
@@ -129,8 +139,10 @@ class AudioSyncManager(context: Context) {
                 if (player.isPlaying) {
                     cachedPositionMs.set(player.currentPosition)
                 } else if (startTimeMs > 0L && player.playbackState == Player.STATE_ENDED) {
-                    // Audio finished - keep time advancing so game can detect end
-                    cachedPositionMs.set(System.currentTimeMillis() - startTimeMs)
+                    // Audio finished - cache the final position once and stop advancing
+                    if (endedPositionMs.get() < 0) {
+                        endedPositionMs.set(cachedPositionMs.get() + offsetMs)
+                    }
                 }
                 mainHandler.postDelayed(this, 4) // ~250Hz update rate
             }

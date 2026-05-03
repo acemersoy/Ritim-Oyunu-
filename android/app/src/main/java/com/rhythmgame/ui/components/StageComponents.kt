@@ -376,6 +376,222 @@ fun StatsCard(icon: ImageVector, value: String, label: String, accentColor: Colo
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  VORTEX PARTICLE FIELD — fire-themed swirl with attractor + turbulence
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Pre-allocated vortex particle. All fields are mutable to avoid per-frame allocation.
+ *  - angle/radius: polar coords around the attractor center
+ *  - radialSpeed: inward (negative) or outward (positive) drift
+ *  - angularSpeed: rad/s orbit speed
+ *  - noisePhase: per-particle offset so turbulence isn't uniform
+ *  - trailAlpha: current fade state (0 = invisible)
+ *  - size: draw radius in px
+ *  - colorIndex: 0..3 selects from the fire palette
+ */
+private class VortexParticle(
+    var angle: Float = 0f,
+    var radius: Float = 0f,
+    var radialSpeed: Float = 0f,
+    var angularSpeed: Float = 0f,
+    var noisePhase: Float = 0f,
+    var trailAlpha: Float = 0f,
+    var size: Float = 1.5f,
+    var colorIndex: Int = 0,
+    var life: Float = 0f,
+    var maxLife: Float = 6f,
+)
+
+private val VortexColors = listOf(
+    DesignTokens.Stage.FireOrange,
+    DesignTokens.Stage.FireYellow,
+    DesignTokens.Stage.FlameRed,
+    DesignTokens.Stage.StageGold,
+)
+
+private fun resetVortexParticle(p: VortexParticle, rng: Random, maxRadius: Float) {
+    p.angle = rng.nextFloat() * (2f * Math.PI.toFloat())
+    p.radius = maxRadius * (0.15f + rng.nextFloat() * 0.85f)
+    p.radialSpeed = -(12f + rng.nextFloat() * 28f)          // drift inward
+    p.angularSpeed = (0.25f + rng.nextFloat() * 0.6f) *     // orbit speed
+        if (rng.nextBoolean()) 1f else -1f
+    p.noisePhase = rng.nextFloat() * 100f
+    p.trailAlpha = 0f
+    p.size = 1.2f + rng.nextFloat() * 2.0f
+    p.colorIndex = rng.nextInt(VortexColors.size)
+    p.life = 0f
+    p.maxLife = 3.5f + rng.nextFloat() * 5f
+}
+
+@Composable
+fun VortexParticleField(
+    modifier: Modifier = Modifier,
+    particleCount: Int = 90,
+    intensity: Float = 0.18f,
+    centerBias: Offset = Offset(0.5f, 0.48f),  // relative center
+) {
+    val rng = remember { Random(System.nanoTime()) }
+    val particles = remember {
+        Array(particleCount) { VortexParticle().also { p -> resetVortexParticle(p, rng, 500f) } }
+    }
+    var lastNs by remember { mutableLongStateOf(0L) }
+    var tick by remember { mutableIntStateOf(0) }
+
+    // Slow global rotation for the whole field
+    val globalRotation by rememberInfiniteTransition(label = "vortex_global")
+        .animateFloat(
+            initialValue = 0f,
+            targetValue = 2f * Math.PI.toFloat(),
+            animationSpec = infiniteRepeatable(tween(28000, easing = LinearEasing)),
+            label = "vortex_rot",
+        )
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            androidx.compose.runtime.withFrameNanos { now ->
+                val dt = if (lastNs == 0L) 0f else ((now - lastNs) / 1_000_000_000f).coerceIn(0f, 0.05f)
+                lastNs = now
+
+                for (p in particles) {
+                    p.life += dt
+                    // Turbulence: layered sine noise on angle + radius
+                    val noise = sin(p.noisePhase + p.life * 1.8f) * 0.15f +
+                        sin(p.noisePhase * 0.7f + p.life * 3.2f) * 0.08f
+                    p.angle += (p.angularSpeed + noise) * dt
+                    p.radius += p.radialSpeed * dt
+
+                    // Fade envelope: ramp up → sustain → fade out
+                    val lifeT = (p.life / p.maxLife).coerceIn(0f, 1f)
+                    p.trailAlpha = when {
+                        lifeT < 0.1f -> lifeT / 0.1f
+                        lifeT > 0.7f -> (1f - lifeT) / 0.3f
+                        else -> 1f
+                    }.coerceIn(0f, 1f) * intensity
+
+                    // Respawn if dead or collapsed to center
+                    if (p.life >= p.maxLife || p.radius < 8f) {
+                        resetVortexParticle(p, rng, 500f)
+                    }
+                }
+                tick++
+            }
+        }
+    }
+
+    Canvas(modifier = modifier) {
+        @Suppress("UNUSED_EXPRESSION") tick
+        val cx = size.width * centerBias.x
+        val cy = size.height * centerBias.y
+        val maxR = minOf(size.width, size.height) * 0.48f
+        val scaleR = maxR / 500f  // particles were spawned in 0..500 space
+
+        // ── Core glow (attractor center) ──
+        drawCircle(
+            brush = Brush.radialGradient(
+                listOf(
+                    DesignTokens.Stage.FireOrange.copy(alpha = intensity * 0.30f),
+                    DesignTokens.Stage.FlameRed.copy(alpha = intensity * 0.08f),
+                    Color.Transparent,
+                ),
+                center = Offset(cx, cy),
+                radius = maxR * 0.22f,
+            ),
+            center = Offset(cx, cy),
+            radius = maxR * 0.22f,
+        )
+
+        // ── Energy rings (2 thin orbiting ellipses) ──
+        for (ring in 0..1) {
+            val ringRadius = maxR * (0.28f + ring * 0.22f)
+            val ringAngle = globalRotation * (if (ring == 0) 1f else -0.7f)
+            val segments = 60
+            for (s in 0 until segments) {
+                val segAngle = ringAngle + s * (2f * Math.PI.toFloat() / segments)
+                val sx = cx + cos(segAngle) * ringRadius * (1f + ring * 0.15f)
+                val sy = cy + sin(segAngle) * ringRadius * (0.55f + ring * 0.1f) // elliptical
+                val segAlpha = (sin(segAngle * 3f + globalRotation * 2f) * 0.5f + 0.5f)
+                    .coerceIn(0f, 1f) * intensity * 0.35f
+                if (segAlpha > 0.01f) {
+                    drawCircle(
+                        color = (if (ring == 0) DesignTokens.Stage.FireYellow else DesignTokens.Stage.FireOrange)
+                            .copy(alpha = segAlpha),
+                        radius = 0.8f + ring * 0.4f,
+                        center = Offset(sx, sy),
+                    )
+                }
+            }
+        }
+
+        // ── Spiral arms (3 faint nebula arms for structure) ──
+        for (arm in 0 until 3) {
+            val armBase = arm * (2f * Math.PI.toFloat() / 3f) + globalRotation * 0.4f
+            for (i in 0 until 28) {
+                val t = i / 28f
+                val spiralAngle = armBase + t * 2.8f * Math.PI.toFloat()
+                val spiralR = t * maxR * 0.9f
+                val nx = cx + cos(spiralAngle) * spiralR
+                val ny = cy + sin(spiralAngle) * spiralR * 0.6f
+                val armAlpha = intensity * (1f - t * 0.7f) *
+                    (0.5f + 0.5f * sin(globalRotation * 1.5f + i * 0.4f))
+                if (armAlpha > 0.005f) {
+                    drawCircle(
+                        color = (if (i % 3 == 0) DesignTokens.Stage.FireOrange
+                        else if (i % 3 == 1) DesignTokens.Stage.StageGold
+                        else DesignTokens.Stage.FireYellow).copy(alpha = armAlpha.coerceAtMost(0.14f)),
+                        radius = 2f + t * 3.5f,
+                        center = Offset(nx, ny),
+                    )
+                }
+            }
+        }
+
+        // ── Particles ──
+        for (p in particles) {
+            if (p.trailAlpha <= 0.005f) continue
+            val pr = p.radius * scaleR
+            val px = cx + cos(p.angle + globalRotation * 0.15f) * pr
+            val py = cy + sin(p.angle + globalRotation * 0.15f) * pr * 0.6f // slight vertical squeeze
+            val color = VortexColors[p.colorIndex]
+
+            // Outer glow
+            drawCircle(
+                color = color.copy(alpha = p.trailAlpha * 0.4f),
+                radius = p.size * 3.2f,
+                center = Offset(px, py),
+            )
+            // Core dot
+            drawCircle(
+                color = color.copy(alpha = p.trailAlpha),
+                radius = p.size,
+                center = Offset(px, py),
+            )
+            // Bright center pip
+            drawCircle(
+                color = Color.White.copy(alpha = p.trailAlpha * 0.6f),
+                radius = p.size * 0.4f,
+                center = Offset(px, py),
+            )
+
+            // Trail: 3 fading dots behind the particle along its orbit
+            for (trail in 1..3) {
+                val trailAngle = p.angle - p.angularSpeed.let { if (it > 0) 1f else -1f } * trail * 0.06f
+                val trailR = pr + trail * 3f  // slightly further out (was closer to center)
+                val tx = cx + cos(trailAngle + globalRotation * 0.15f) * trailR
+                val ty = cy + sin(trailAngle + globalRotation * 0.15f) * trailR * 0.6f
+                val trailA = p.trailAlpha * (0.3f - trail * 0.08f)
+                if (trailA > 0.005f) {
+                    drawCircle(
+                        color = color.copy(alpha = trailA),
+                        radius = p.size * (0.7f - trail * 0.12f),
+                        center = Offset(tx, ty),
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun AchievementBadge(icon: ImageVector, title: String, unlocked: Boolean, modifier: Modifier = Modifier) {
     Column(modifier = modifier.width(90.dp).clip(RoundedCornerShape(DesignTokens.radiusMedium)).background(if (unlocked) DesignTokens.Stage.DarkChrome else DesignTokens.Stage.DarkChrome.copy(alpha = 0.5f)).then(if (unlocked) Modifier.drawBehind { drawRoundRect(brush = Brush.linearGradient(listOf(DesignTokens.Stage.FireYellow.copy(alpha = 0.3f), DesignTokens.Stage.FireOrange.copy(alpha = 0.3f))), cornerRadius = CornerRadius(DesignTokens.radiusMedium.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)) } else Modifier).padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -383,5 +599,39 @@ fun AchievementBadge(icon: ImageVector, title: String, unlocked: Boolean, modifi
         Text(text = title, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = ManropeFontFamily, color = if (unlocked) DesignTokens.Text.Primary else DesignTokens.Text.Disabled, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (!unlocked) { Spacer(modifier = Modifier.height(4.dp)); Text(text = "\uD83D\uDD12", fontSize = 10.sp) }
     }
+}
+
+/**
+ * Shimmer loading placeholder box.
+ */
+@Composable
+fun ShimmerBox(
+    modifier: Modifier = Modifier,
+    cornerRadius: Dp = 8.dp,
+) {
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val shimmerOffset by transition.animateFloat(
+        initialValue = -1f,
+        targetValue = 2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = LinearEasing),
+        ),
+        label = "shimmerOffset",
+    )
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(cornerRadius))
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.05f),
+                        Color.White.copy(alpha = 0.15f),
+                        Color.White.copy(alpha = 0.05f),
+                    ),
+                    start = Offset(shimmerOffset * 300f, 0f),
+                    end = Offset(shimmerOffset * 300f + 300f, 0f),
+                )
+            ),
+    )
 }
 

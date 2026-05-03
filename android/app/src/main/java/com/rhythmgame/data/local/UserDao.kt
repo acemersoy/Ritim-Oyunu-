@@ -12,6 +12,9 @@ interface UserDao {
     @Query("SELECT * FROM profile WHERE id = :userId LIMIT 1")
     fun getProfile(userId: String = "current_user"): Flow<ProfileEntity?>
 
+    @Query("SELECT * FROM profile WHERE id = :userId LIMIT 1")
+    suspend fun getProfileSync(userId: String = "current_user"): ProfileEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun updateProfile(profile: ProfileEntity)
 
@@ -35,4 +38,7 @@ interface UserDao {
 
     @Query("UPDATE profile SET xp = :xp, level = :level WHERE id = :userId")
     suspend fun updateXpAndLevel(xp: Long, level: Int, userId: String = "current_user")
+
+    @Query("UPDATE profile SET stars = stars + :amount WHERE id = :userId")
+    suspend fun addStars(amount: Int, userId: String = "current_user")
 }

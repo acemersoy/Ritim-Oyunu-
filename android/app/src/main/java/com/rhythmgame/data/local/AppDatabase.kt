@@ -1,5 +1,6 @@
 package com.rhythmgame.data.local
 
+import android.database.Cursor
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
@@ -7,20 +8,44 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.rhythmgame.data.model.Song
 
 @Database(
-    entities = [Song::class, ChartEntity::class, ProfileEntity::class, GameResultEntity::class],
-    version = 4,
-    exportSchema = false
+    entities = [Song::class, ChartEntity::class, ProfileEntity::class, GameResultEntity::class, AchievementEntity::class],
+    version = 6,
+    exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun songDao(): SongDao
     abstract fun chartDao(): ChartDao
     abstract fun userDao(): UserDao
+    abstract fun achievementDao(): AchievementDao
 
     companion object {
+
+        private fun SupportSQLiteDatabase.hasColumn(table: String, column: String): Boolean {
+            val cursor: Cursor = query("PRAGMA table_info($table)")
+            cursor.use {
+                val nameIndex = it.getColumnIndex("name")
+                while (it.moveToNext()) {
+                    if (it.getString(nameIndex) == column) return true
+                }
+            }
+            return false
+        }
+
+        private fun SupportSQLiteDatabase.addColumnIfMissing(
+            table: String,
+            column: String,
+            type: String,
+            defaultValue: String,
+        ) {
+            if (!hasColumn(table, column)) {
+                execSQL("ALTER TABLE $table ADD COLUMN $column $type NOT NULL DEFAULT $defaultValue")
+            }
+        }
+
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE songs ADD COLUMN localAudioPath TEXT")
-                db.execSQL("ALTER TABLE songs ADD COLUMN errorMessage TEXT")
+                db.addColumnIfMissing("songs", "localAudioPath", "TEXT", "''")
+                db.addColumnIfMissing("songs", "errorMessage", "TEXT", "''")
 
                 db.execSQL("""
                     CREATE TABLE IF NOT EXISTS charts (
@@ -35,7 +60,6 @@ abstract class AppDatabase : RoomDatabase() {
 
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                // Create profile table if not exists
                 db.execSQL("""
                     CREATE TABLE IF NOT EXISTS profile (
                         id TEXT NOT NULL PRIMARY KEY,
@@ -54,7 +78,6 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                 """.trimIndent())
 
-                // Create game_results table if not exists
                 db.execSQL("""
                     CREATE TABLE IF NOT EXISTS game_results (
                         id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -70,23 +93,39 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                 """.trimIndent())
 
-                // Try to add currency columns to existing profile table (may already exist)
-                try {
-                    db.execSQL("ALTER TABLE profile ADD COLUMN coins INTEGER NOT NULL DEFAULT 0")
-                } catch (_: Exception) {}
-                try {
-                    db.execSQL("ALTER TABLE profile ADD COLUMN energy INTEGER NOT NULL DEFAULT 120")
-                } catch (_: Exception) {}
-                try {
-                    db.execSQL("ALTER TABLE profile ADD COLUMN maxEnergy INTEGER NOT NULL DEFAULT 120")
-                } catch (_: Exception) {}
+                db.addColumnIfMissing("profile", "coins", "INTEGER", "0")
+                db.addColumnIfMissing("profile", "energy", "INTEGER", "120")
+                db.addColumnIfMissing("profile", "maxEnergy", "INTEGER", "120")
             }
         }
 
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE songs ADD COLUMN isFavorite INTEGER NOT NULL DEFAULT 0")
-                db.execSQL("ALTER TABLE songs ADD COLUMN lastPlayedAt INTEGER NOT NULL DEFAULT 0")
+                db.addColumnIfMissing("songs", "isFavorite", "INTEGER", "0")
+                db.addColumnIfMissing("songs", "lastPlayedAt", "INTEGER", "0")
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.addColumnIfMissing("profile", "stars", "INTEGER", "0")
+            }
+        }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS achievements (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        isUnlocked INTEGER NOT NULL DEFAULT 0,
+                        unlockedAt INTEGER NOT NULL DEFAULT 0,
+                        progress INTEGER NOT NULL DEFAULT 0,
+                        target INTEGER NOT NULL DEFAULT 1
+                    )
+                """.trimIndent())
             }
         }
     }

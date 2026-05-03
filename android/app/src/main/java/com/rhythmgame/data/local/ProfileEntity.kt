@@ -17,5 +17,6 @@ data class ProfileEntity(
     val isSynced: Boolean = false,
     val coins: Long = 0,
     val energy: Int = 120,
-    val maxEnergy: Int = 120
+    val maxEnergy: Int = 120,
+    val stars: Int = 0
 )

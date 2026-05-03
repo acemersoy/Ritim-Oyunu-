@@ -45,9 +45,34 @@ class SettingsViewModel @Inject constructor(
     val offsetMs: Long get() = calibration.offsetMs
 
     val gameScreenStyle: String get() = gamePreferences.gameScreenStyle
+    val particlesEnabled: Boolean get() = gamePreferences.particlesEnabled
+    val rhythmVibrationEnabled: Boolean get() = gamePreferences.rhythmVibrationEnabled
+    val menuVibrationEnabled: Boolean get() = gamePreferences.menuVibrationEnabled
+    val musicVolume: Float get() = gamePreferences.musicVolume
+    val sfxVolume: Float get() = gamePreferences.sfxVolume
 
     fun setGameScreenStyle(style: String) {
         gamePreferences.gameScreenStyle = style
+    }
+
+    fun setParticlesEnabled(enabled: Boolean) {
+        gamePreferences.particlesEnabled = enabled
+    }
+
+    fun setRhythmVibrationEnabled(enabled: Boolean) {
+        gamePreferences.rhythmVibrationEnabled = enabled
+    }
+
+    fun setMenuVibrationEnabled(enabled: Boolean) {
+        gamePreferences.menuVibrationEnabled = enabled
+    }
+
+    fun setMusicVolume(volume: Float) {
+        gamePreferences.musicVolume = volume
+    }
+
+    fun setSfxVolume(volume: Float) {
+        gamePreferences.sfxVolume = volume
     }
 
     fun setOffsetMs(value: Long) {
@@ -84,11 +109,11 @@ fun SettingsScreen(
     var serverUrl by remember { mutableStateOf(viewModel.getServerUrl()) }
     var showRestartHint by remember { mutableStateOf(false) }
     val colors = LocalAppColors.current
-    var musicVolume by remember { mutableFloatStateOf(0.8f) }
-    var sfxVolume by remember { mutableFloatStateOf(0.7f) }
-    var vibrationEnabled by remember { mutableStateOf(true) }
-    var particlesEnabled by remember { mutableStateOf(true) }
-    var showFps by remember { mutableStateOf(false) }
+    var musicVolume by remember { mutableFloatStateOf(viewModel.musicVolume) }
+    var sfxVolume by remember { mutableFloatStateOf(viewModel.sfxVolume) }
+    var rhythmVibrationEnabled by remember { mutableStateOf(viewModel.rhythmVibrationEnabled) }
+    var menuVibrationEnabled by remember { mutableStateOf(viewModel.menuVibrationEnabled) }
+    var particlesEnabled by remember { mutableStateOf(viewModel.particlesEnabled) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         ThemedBackground(modifier = Modifier.fillMaxSize())
@@ -137,7 +162,7 @@ fun SettingsScreen(
                 SettingRow(icon = Icons.Default.MusicNote, label = "Muzik Sesi") {
                     Slider(
                         value = musicVolume,
-                        onValueChange = { musicVolume = it },
+                        onValueChange = { musicVolume = it; viewModel.setMusicVolume(it) },
                         modifier = Modifier.width(120.dp),
                         colors = SliderDefaults.colors(
                             thumbColor = colors.primary,
@@ -149,7 +174,7 @@ fun SettingsScreen(
                 SettingRow(icon = Icons.Default.VolumeUp, label = "Efekt Sesleri") {
                     Slider(
                         value = sfxVolume,
-                        onValueChange = { sfxVolume = it },
+                        onValueChange = { sfxVolume = it; viewModel.setSfxVolume(it) },
                         modifier = Modifier.width(120.dp),
                         colors = SliderDefaults.colors(
                             thumbColor = colors.primary,
@@ -158,10 +183,20 @@ fun SettingsScreen(
                         ),
                     )
                 }
-                SettingRow(icon = Icons.Default.Vibration, label = "Titresim") {
+                SettingRow(icon = Icons.Default.Vibration, label = "Ritimle Titresim") {
                     Switch(
-                        checked = vibrationEnabled,
-                        onCheckedChange = { vibrationEnabled = it },
+                        checked = rhythmVibrationEnabled,
+                        onCheckedChange = { rhythmVibrationEnabled = it; viewModel.setRhythmVibrationEnabled(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.primary,
+                            checkedTrackColor = colors.primary.copy(alpha = 0.3f),
+                        ),
+                    )
+                }
+                SettingRow(icon = Icons.Default.Vibration, label = "Menu Titresim") {
+                    Switch(
+                        checked = menuVibrationEnabled,
+                        onCheckedChange = { menuVibrationEnabled = it; viewModel.setMenuVibrationEnabled(it) },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = colors.primary,
                             checkedTrackColor = colors.primary.copy(alpha = 0.3f),
@@ -184,17 +219,7 @@ fun SettingsScreen(
                 SettingRow(icon = Icons.Default.AutoAwesome, label = "Parcacik Efektleri") {
                     Switch(
                         checked = particlesEnabled,
-                        onCheckedChange = { particlesEnabled = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = colors.primary,
-                            checkedTrackColor = colors.primary.copy(alpha = 0.3f),
-                        ),
-                    )
-                }
-                SettingRow(icon = Icons.Default.Speed, label = "FPS Goster") {
-                    Switch(
-                        checked = showFps,
-                        onCheckedChange = { showFps = it },
+                        onCheckedChange = { particlesEnabled = it; viewModel.setParticlesEnabled(it) },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = colors.primary,
                             checkedTrackColor = colors.primary.copy(alpha = 0.3f),

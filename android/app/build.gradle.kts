@@ -24,7 +24,7 @@ android {
 
     buildTypes {
         debug {
-            buildConfigField("String", "BASE_URL", "\"https://industry-expanding-ban-primarily.trycloudflare.com/api/\"")
+            buildConfigField("String", "BASE_URL", "\"https://benchmark-neil-relevant-hierarchy.trycloudflare.com/api/\"")
         }
         release {
             isMinifyEnabled = true
@@ -33,7 +33,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            buildConfigField("String", "BASE_URL", "\"https://industry-expanding-ban-primarily.trycloudflare.com/api/\"")
+            buildConfigField("String", "BASE_URL", "\"https://benchmark-neil-relevant-hierarchy.trycloudflare.com/api/\"")
         }
     }
 
@@ -112,6 +112,9 @@ dependencies {
 
     // Gson
     implementation("com.google.code.gson:gson:2.10.1")
+
+    // Security (EncryptedSharedPreferences)
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

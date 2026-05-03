@@ -9,7 +9,11 @@ import kotlin.math.sin
 class GameRenderer(
     private val screenWidth: Float,
     private val screenHeight: Float,
+    approachTimeMs: Long = 2000L,
+    private val guitarBitmap: Bitmap? = null,
+    private val guitarFullBitmap: Bitmap? = null,
 ) : IGameRenderer {
+    private val approachTimeMsF = approachTimeMs.toFloat()
     private val laneCount = 5
 
     // --- Highway Geometry (3D perspective) ---
@@ -36,13 +40,33 @@ class GameRenderer(
     )
     private val perspectiveExponent = 2.5f
 
-    // Power Bar geometry
-    private val powerBarRight = screenWidth - 10f
-    private val powerBarBarWidth = 20f
-    private val powerBarLeft = powerBarRight - powerBarBarWidth
-    private val powerBarTop = screenHeight * 0.25f
-    private val powerBarBottom = screenHeight * 0.72f
-    private val powerBarHeight = powerBarBottom - powerBarTop
+    // Guitar Power Bar geometry — parallel to highway right edge, bigger
+    private val guitarHeight = screenHeight * 0.88f
+    private val guitarWidth = guitarHeight * 0.667f  // 2:3 aspect
+    private val guitarLeft = highwayBottomRight + 4f  // just right of highway edge
+    private val guitarRight = guitarLeft + guitarWidth
+    private val guitarTop = (screenHeight - guitarHeight) / 2f
+    private val guitarBottom = guitarTop + guitarHeight
+    private val guitarCenterX = (guitarLeft + guitarRight) / 2f
+    // Fretboard trapezoid — pixel-matched to the guitar PNG inner neck channel
+    // Top of neck (y=10%): left=0.501, right=0.568   Bottom of neck (y=55%): left=0.470, right=0.552
+    private val fbTopY = guitarTop + guitarHeight * 0.10f
+    private val fbBotY = guitarTop + guitarHeight * 0.55f
+    private val fbTopLeft = guitarLeft + guitarWidth * 0.501f
+    private val fbTopRight = guitarLeft + guitarWidth * 0.568f
+    private val fbBotLeft = guitarLeft + guitarWidth * 0.470f
+    private val fbBotRight = guitarLeft + guitarWidth * 0.552f
+    private val guitarBodyCenterY = guitarTop + guitarHeight * 0.72f
+    private val guitarDestRect = RectF(guitarLeft, guitarTop, guitarRight, guitarBottom)
+    private val guitarBitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val guitarGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val guitarGlowHaloPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val fretboardFillPath = Path()
+    // Smooth fill animation
+    private var displayedProgress = 0f
+    // Pre-allocated halo smoke particle data: [x, y, size, phase] * 12 particles
+    private val haloParticleCount = 12
+    private val haloParticleData = FloatArray(haloParticleCount * 4)
 
     // ── Neon Kineticism Lane Colors ──────────────────────────────────────
     private val laneColors = intArrayOf(
@@ -60,6 +84,18 @@ class GameRenderer(
         Color.rgb(134, 239, 172),  // Lane 4 glow
         Color.rgb(255, 153, 153),  // Lane 5 glow
     )
+
+    // --- Video background ---
+    private var videoPlayerNormal: VideoBackgroundPlayer? = null
+    private var videoPlayerPower: VideoBackgroundPlayer? = null
+    private val videoDstRect = RectF(0f, 0f, screenWidth, screenHeight)
+    private val videoPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val videoDimPaint = Paint().apply { color = Color.argb(80, 0, 0, 0) } // ~31% dim overlay
+
+    override fun setVideoBackground(normal: VideoBackgroundPlayer?, power: VideoBackgroundPlayer?) {
+        videoPlayerNormal = normal
+        videoPlayerPower = power
+    }
 
     // --- Pre-allocated Paints ---
 
@@ -200,6 +236,11 @@ class GameRenderer(
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
 
+    // Power mode red overlay
+    private val powerOverlayPaint = Paint().apply {
+        color = Color.argb(0, 180, 30, 20)
+    }
+
     // Smoke particle rendering
     private val SMOKE_VARIANT_COUNT = 4
     private val SMOKE_BITMAP_SIZE = 128
@@ -212,6 +253,7 @@ class GameRenderer(
     private val smokeRectF = RectF()
     private var whiteSmokeBitmaps: Array<Bitmap> = emptyArray()
     private var tintedSmokeBitmaps: Array<Array<Bitmap>> = emptyArray() // [laneIndex][textureIndex]
+    private var fireSmokeBitmaps: Array<Bitmap> = emptyArray() // red/fire tinted smoke for power mode
 
     // Progress bar: primary-to-secondary gradient
     private val progressBgPaint = Paint().apply { color = Color.rgb(21, 5, 41) }
@@ -260,6 +302,17 @@ class GameRenderer(
     private val holdTrailPath = Path()
     private val rectF = RectF()
     private val shaderMatrix = Matrix()
+
+    // --- Star field ---
+    private val starCount = 50
+    private val starData = FloatArray(starCount * 4) // [x, y, baseAlpha, phase] × 50
+    private val starPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(240, 223, 255)
+    }
+
+    // --- Side light beams ---
+    private val beamPath = Path()
+    private val beamPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     // Pre-cached shaders to avoid per-frame allocation
     private val laneNoteShaders = Array(laneCount) { i ->
@@ -311,6 +364,26 @@ class GameRenderer(
         // Pre-create smoke bitmaps and tinted variants for all 5 lane colors
         whiteSmokeBitmaps = createWhiteSmokeBitmaps()
         tintedSmokeBitmaps = createTintedSmokeBitmaps(whiteSmokeBitmaps, laneColors)
+        // Fire-colored smoke for power mode hit effects
+        fireSmokeBitmaps = createFireSmokeBitmaps(whiteSmokeBitmaps)
+
+        // Initialize star positions
+        val rng = java.util.Random(42)
+        for (i in 0 until starCount) {
+            starData[i * 4 + 0] = rng.nextFloat() * screenWidth      // x
+            starData[i * 4 + 1] = rng.nextFloat() * screenHeight * 0.85f // y (top 85%)
+            starData[i * 4 + 2] = 40f + rng.nextFloat() * 80f        // base alpha
+            starData[i * 4 + 3] = rng.nextFloat() * 6.28f            // phase offset
+        }
+
+        // Initialize halo particle data: phaseOffset, speed, sizeVar, texFrac
+        for (i in 0 until haloParticleCount) {
+            val off = i * 4
+            haloParticleData[off] = rng.nextFloat() * 6.28f       // random phase offset
+            haloParticleData[off + 1] = 0.4f + rng.nextFloat() * 0.8f // speed 0.4-1.2
+            haloParticleData[off + 2] = rng.nextFloat()           // size variation 0-1
+            haloParticleData[off + 3] = rng.nextFloat()           // texture index fraction
+        }
     }
 
     // --- Public getters for GameEngine ---
@@ -363,12 +436,39 @@ class GameRenderer(
     override fun render(canvas: Canvas, state: GameState) {
         val frameTimeMs = state.frameTimeMs
 
-        canvas.drawRect(0f, 0f, screenWidth, screenHeight, bgPaint)
+        // Layer 1: Background — power video / normal video / gradient fallback
+        val activePlayer = if (state.powerActive) videoPlayerPower ?: videoPlayerNormal else videoPlayerNormal
+        val vFrame = activePlayer?.currentFrame
+        var videoDrawn = false
+        if (vFrame != null && !vFrame.isRecycled) {
+            try {
+                canvas.drawBitmap(vFrame, null, videoDstRect, videoPaint)
+                canvas.drawRect(0f, 0f, screenWidth, screenHeight, videoDimPaint)
+                videoDrawn = true
+            } catch (_: Exception) {
+                // Bitmap was recycled between check and draw — fall through to gradient
+            }
+        }
+        if (!videoDrawn) {
+            canvas.drawRect(0f, 0f, screenWidth, screenHeight, bgPaint)
+        }
+
+        // Red tint overlay when power/special combo is active
+        if (state.powerActive) {
+            val pulse = (sin(frameTimeMs * 0.004).toFloat() * 0.15f + 0.85f)
+            powerOverlayPaint.color = Color.argb((50 * pulse).toInt(), 180, 30, 20)
+            canvas.drawRect(0f, 0f, screenWidth, screenHeight, powerOverlayPaint)
+        }
+
+        drawStarField(canvas, frameTimeMs)
+        drawSideBeams(canvas, frameTimeMs)
         drawHighway(canvas, frameTimeMs)
         drawLaneHighlights(canvas, state)
 
         for (activeNote in state.activeNotes) {
             if (activeNote.isHit && activeNote.note.isTap) continue
+            // Skip trail for completed holds (released or auto-completed)
+            if (activeNote.note.isHold && activeNote.isHit) continue
             if (activeNote.note.isHold) drawHoldTrail(canvas, activeNote, frameTimeMs)
         }
 
@@ -377,6 +477,8 @@ class GameRenderer(
 
         for (activeNote in state.activeNotes) {
             if (activeNote.isHit && activeNote.note.isTap) continue
+            // Skip head for active/completed holds (burst already happened on tap)
+            if (activeNote.note.isHold && (activeNote.isActive || activeNote.isHit)) continue
             drawNote(canvas, activeNote)
         }
 
@@ -387,10 +489,62 @@ class GameRenderer(
         drawProgressBar(canvas, state)
 
         when (state.phase) {
-            GamePhase.COUNTDOWN -> drawCountdown(canvas, state.countdownValue, frameTimeMs)
+            GamePhase.COUNTDOWN, GamePhase.RESUME_COUNTDOWN -> drawCountdown(canvas, state.countdownValue, frameTimeMs)
             GamePhase.PAUSED -> drawPauseOverlay(canvas)
             else -> {}
         }
+    }
+
+    // ========== STAR FIELD ==========
+
+    private fun drawStarField(canvas: Canvas, frameTimeMs: Long) {
+        val time = frameTimeMs * 0.001f
+        for (i in 0 until starCount) {
+            val x = starData[i * 4]
+            val y = starData[i * 4 + 1]
+            val baseAlpha = starData[i * 4 + 2]
+            val phase = starData[i * 4 + 3]
+            val alpha = (baseAlpha + sin((time * 1.5f + phase).toDouble()).toFloat() * 40f)
+                .toInt().coerceIn(0, 140)
+            starPaint.alpha = alpha
+            canvas.drawCircle(x, y, 1.5f, starPaint)
+        }
+    }
+
+    // ========== SIDE BEAMS ==========
+
+    private fun drawSideBeams(canvas: Canvas, frameTimeMs: Long) {
+        val pulse = (sin(frameTimeMs * 0.0008).toFloat() + 1f) / 2f
+        val beamAlpha = (12 + pulse * 15).toInt()
+
+        // Left beam
+        beamPath.reset()
+        beamPath.moveTo(0f, 0f)
+        beamPath.lineTo(screenWidth * 0.35f, screenHeight)
+        beamPath.lineTo(screenWidth * 0.15f, screenHeight)
+        beamPath.close()
+        beamPaint.shader = LinearGradient(
+            0f, 0f, screenWidth * 0.25f, screenHeight,
+            Color.argb(beamAlpha, 80, 225, 249),
+            Color.argb(0, 80, 225, 249),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawPath(beamPath, beamPaint)
+
+        // Right beam
+        beamPath.reset()
+        beamPath.moveTo(screenWidth, 0f)
+        beamPath.lineTo(screenWidth * 0.65f, screenHeight)
+        beamPath.lineTo(screenWidth * 0.85f, screenHeight)
+        beamPath.close()
+        beamPaint.shader = LinearGradient(
+            screenWidth, 0f, screenWidth * 0.75f, screenHeight,
+            Color.argb(beamAlpha, 196, 127, 255),
+            Color.argb(0, 196, 127, 255),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawPath(beamPath, beamPaint)
+        beamPaint.shader = null
     }
 
     // ========== HIGHWAY ==========
@@ -493,13 +647,13 @@ class GameRenderer(
 
         if (radius < 2f) return
 
-        // Proximity glow - more intense, wider ambient glow
+        // Proximity glow - wider ambient glow
         val distToStrike = abs(progress - 1f)
-        if (distToStrike < 0.35f) {
-            val intensity = 1f - distToStrike / 0.35f
+        if (distToStrike < 0.4f) {
+            val intensity = 1f - distToStrike / 0.4f
             noteGlowPaint.color = glowColor
-            noteGlowPaint.alpha = (intensity * 220).toInt()
-            canvas.drawCircle(centerX, screenY, radius * 1.7f, noteGlowPaint)
+            noteGlowPaint.alpha = (intensity * 200).toInt()
+            canvas.drawCircle(centerX, screenY, radius * 2.0f, noteGlowPaint)
         }
 
         // Gem body - use pre-cached shader with matrix translation
@@ -512,7 +666,13 @@ class GameRenderer(
         canvas.drawCircle(centerX, screenY, radius, notePaint)
         notePaint.shader = null
 
-        // Rim
+        // Outer ring
+        noteRimPaint.strokeWidth = 2f * scale
+        noteRimPaint.color = Color.argb(60, Color.red(color), Color.green(color), Color.blue(color))
+        canvas.drawCircle(centerX, screenY, radius * 1.25f, noteRimPaint)
+
+        // Inner rim (restore color)
+        noteRimPaint.color = Color.argb(120, 240, 223, 255)
         noteRimPaint.strokeWidth = 3f * scale
         canvas.drawCircle(centerX, screenY, radius, noteRimPaint)
 
@@ -528,15 +688,26 @@ class GameRenderer(
         if (laneIndex !in 0 until laneCount) return
         val color = laneColors[laneIndex]
 
-        val headProgress = noteProgress(activeNote)
-        val holdProgressSpan = note.durationMs.toFloat() / 2000f
-        val tailProgress = (headProgress - holdProgressSpan).coerceAtLeast(-0.1f)
+        val holdProgressSpan = note.durationMs.toFloat() / approachTimeMsF
 
-        val trailHalfWidth = fretButtonRadius * 0.32f
-        val steps = 16
+        // While held: head clamped at hit line, tail shrinks as hold progresses
+        val headProgress: Float
+        val tailProgress: Float
+        if (activeNote.isActive) {
+            headProgress = 1.0f
+            val remainingFraction = (1f - activeNote.holdProgress).coerceIn(0f, 1f)
+            tailProgress = 1.0f - holdProgressSpan * remainingFraction
+        } else {
+            headProgress = noteProgress(activeNote)
+            tailProgress = headProgress - holdProgressSpan
+        }
+
+        val trailHalfWidth = fretButtonRadius * 0.38f
+        val steps = 20
 
         holdTrailPath.reset()
 
+        // Left edge
         for (i in 0..steps) {
             val t = tailProgress + (headProgress - tailProgress) * i / steps
             val tc = t.coerceIn(0f, 1.2f)
@@ -547,6 +718,7 @@ class GameRenderer(
             if (i == 0) holdTrailPath.moveTo(cx - halfW, y)
             else holdTrailPath.lineTo(cx - halfW, y)
         }
+        // Right edge (reverse)
         for (i in steps downTo 0) {
             val t = tailProgress + (headProgress - tailProgress) * i / steps
             val tc = t.coerceIn(0f, 1.2f)
@@ -558,16 +730,38 @@ class GameRenderer(
         }
         holdTrailPath.close()
 
-        holdPaint.shader = null
+        // Alpha gradient: transparent at vanishing point, opaque near head
+        val topY = perspectiveY(tailProgress.coerceAtLeast(0f))
+        val bottomY = perspectiveY(headProgress.coerceAtMost(1.2f))
+        holdPaint.shader = LinearGradient(
+            0f, topY, 0f, bottomY,
+            Color.argb(0, Color.red(color), Color.green(color), Color.blue(color)),
+            Color.argb(140, Color.red(color), Color.green(color), Color.blue(color)),
+            Shader.TileMode.CLAMP
+        )
         holdPaint.style = Paint.Style.FILL
-        holdPaint.color = Color.argb(100, Color.red(color), Color.green(color), Color.blue(color))
         canvas.drawPath(holdTrailPath, holdPaint)
+        holdPaint.shader = null
 
+        // Pulsing border
         val pulse = ((sin(frameTimeMs * 0.006).toFloat() + 1f) / 2f * 70 + 50).toInt()
         holdBorderPaint.color = Color.argb(
             pulse, Color.red(color), Color.green(color), Color.blue(color)
         )
         canvas.drawPath(holdTrailPath, holdBorderPaint)
+
+        // Center light strip — thin dots from tail to head
+        for (i in 0..steps) {
+            val t = tailProgress + (headProgress - tailProgress) * i / steps
+            val tc = t.coerceIn(0f, 1.2f)
+            val y = perspectiveY(tc)
+            val cx = laneCenterX(laneIndex, tc)
+            val fadeProgress = i.toFloat() / steps  // 0 = tail, 1 = head
+            val lineAlpha = (fadeProgress * 120).toInt()
+            noteCenterPaint.alpha = lineAlpha
+            canvas.drawCircle(cx, y, 1.5f * perspectiveScale(tc), noteCenterPaint)
+        }
+        noteCenterPaint.alpha = 200
     }
 
     // ========== LANE HIGHLIGHTS ==========
@@ -611,6 +805,7 @@ class GameRenderer(
     // ========== SMOKE PARTICLES ==========
 
     private fun drawParticles(canvas: Canvas, state: GameState) {
+        if (!state.particlesEnabled) return
         for (p in state.particles) {
             val alpha = (p.life * 255).toInt().coerceIn(0, 255)
             if (alpha <= 0) continue
@@ -696,58 +891,126 @@ class GameRenderer(
         }
     }
 
+    // ========== FIRE SMOKE BITMAPS (power mode) ==========
+
+    private fun createFireSmokeBitmaps(bases: Array<Bitmap>): Array<Bitmap> {
+        val tintPaint = Paint()
+        val fireColor = Color.rgb(220, 60, 20)
+        return Array(bases.size) { texIdx ->
+            val base = bases[texIdx]
+            val tinted = Bitmap.createBitmap(base.width, base.height, Bitmap.Config.ARGB_8888)
+            val c = Canvas(tinted)
+            tintPaint.xfermode = null
+            c.drawBitmap(base, 0f, 0f, tintPaint)
+            tintPaint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+            tintPaint.color = fireColor
+            c.drawRect(0f, 0f, base.width.toFloat(), base.height.toFloat(), tintPaint)
+            tintPaint.xfermode = null
+            tinted
+        }
+    }
+
     // ========== HIT EFFECTS ==========
 
     private fun drawHitEffects(canvas: Canvas, state: GameState, frameTimeMs: Long) {
+        val isPowerMode = state.powerActive
         for (effect in state.hitEffects) {
             val age = frameTimeMs - effect.createdAt
-            if (age > 400) continue
+            val maxAge = if (isPowerMode) 600L else 400L
+            if (age > maxAge) continue
 
-            val progress = age / 400f
+            val progress = age / maxAge.toFloat()
             val laneIndex = effect.lane - 1
             if (laneIndex !in 0 until laneCount) continue
 
             val centerX = laneCenterX(laneIndex, 1.0f)
             val centerY = highwayBottomY
 
-            // Overpress: red X effect
+            // Overpress / Miss: red pulse + X effect
             if (effect.result == HitResult.MISS) {
                 val missAlpha = ((1f - progress) * 255).toInt()
+
+                // Red pulse ring expanding outward
+                hitHaloPaint.color = Color.rgb(255, 82, 82)
+                hitHaloPaint.alpha = (missAlpha * 0.5f).toInt()
+                hitHaloPaint.style = Paint.Style.STROKE
+                hitHaloPaint.strokeWidth = 3f
+                canvas.drawCircle(centerX, centerY, fretButtonRadius * (0.8f + progress * 1.5f), hitHaloPaint)
+                hitHaloPaint.style = Paint.Style.FILL
+
+                // Red flash fill on the fret
+                hitCorePaint.color = Color.rgb(255, 50, 50)
+                hitCorePaint.alpha = (missAlpha * 0.3f).toInt()
+                hitCorePaint.style = Paint.Style.FILL
+                canvas.drawCircle(centerX, centerY, fretButtonRadius * (1f - progress * 0.3f), hitCorePaint)
+
+                // X text floating up
                 overpressPaint.alpha = missAlpha
                 val textY = centerY - 60f - progress * 40f
                 canvas.drawText("X", centerX, textY, overpressPaint)
                 continue
             }
 
-            val burstSize = fretButtonRadius * (1f + progress * 2f)
-            val alpha = ((1f - progress) * 255).toInt()
+            if (isPowerMode) {
+                // Fire smoke effect during power mode
+                val smokeAlpha = ((1f - progress) * 220).toInt().coerceIn(0, 255)
+                val smokeSize = fretButtonRadius * (1.5f + progress * 3f)
+                for (i in 0..2) {
+                    val texIdx = (effect.lane + i) % SMOKE_VARIANT_COUNT
+                    val offsetX = effect.sparkOffsetsX[i] * smokeSize * 0.6f
+                    val offsetY = progress * smokeSize * 1.2f + effect.sparkOffsetsY[i] * smokeSize * 0.4f
+                    val halfS = smokeSize * (0.6f + i * 0.15f)
+                    smokeRectF.set(
+                        centerX + offsetX - halfS,
+                        centerY - offsetY - halfS,
+                        centerX + offsetX + halfS,
+                        centerY - offsetY + halfS,
+                    )
+                    smokePaint.alpha = (smokeAlpha * (1f - i * 0.25f)).toInt().coerceIn(0, 255)
+                    canvas.drawBitmap(fireSmokeBitmaps[texIdx], null, smokeRectF, smokePaint)
+                }
 
-            // Core burst - cyan tinted
-            hitCorePaint.color = Color.rgb(240, 223, 255)
-            hitCorePaint.alpha = alpha
-            hitCorePaint.style = Paint.Style.FILL
-            canvas.drawCircle(centerX, centerY, burstSize * 0.4f, hitCorePaint)
+                // Fire core burst
+                hitCorePaint.color = Color.rgb(255, 100, 30)
+                hitCorePaint.alpha = smokeAlpha
+                hitCorePaint.style = Paint.Style.FILL
+                canvas.drawCircle(centerX, centerY, fretButtonRadius * (0.5f + progress * 1.2f), hitCorePaint)
 
-            // Halo - primary/secondary tinted
-            val haloColor = if (effect.result == HitResult.PERFECT) {
-                Color.rgb(80, 225, 249) // cyan
+                // Fire halo
+                hitHaloPaint.color = Color.rgb(200, 50, 20)
+                hitHaloPaint.alpha = (smokeAlpha * 0.5f).toInt()
+                canvas.drawCircle(centerX, centerY, fretButtonRadius * (0.8f + progress * 1.8f), hitHaloPaint)
             } else {
-                Color.rgb(196, 127, 255) // purple
-            }
-            hitHaloPaint.color = haloColor
-            hitHaloPaint.alpha = (alpha * 0.7f).toInt()
-            canvas.drawCircle(centerX, centerY, burstSize * 0.8f, hitHaloPaint)
+                val burstSize = fretButtonRadius * (1f + progress * 2f)
+                val alpha = ((1f - progress) * 255).toInt()
 
-            // Sparks
-            for (i in 0..4) {
-                val sparkOffsetX = effect.sparkOffsetsX[i] * burstSize
-                val sparkOffsetY = progress * 150f + effect.sparkOffsetsY[i] * 50f
-                canvas.drawPoint(centerX + sparkOffsetX, centerY - sparkOffsetY, hitSparkPaint)
+                // Core burst
+                hitCorePaint.color = Color.rgb(240, 223, 255)
+                hitCorePaint.alpha = alpha
+                hitCorePaint.style = Paint.Style.FILL
+                canvas.drawCircle(centerX, centerY, burstSize * 0.4f, hitCorePaint)
+
+                // Halo
+                val haloColor = if (effect.result == HitResult.PERFECT) {
+                    Color.rgb(80, 225, 249)
+                } else {
+                    Color.rgb(196, 127, 255)
+                }
+                hitHaloPaint.color = haloColor
+                hitHaloPaint.alpha = (alpha * 0.7f).toInt()
+                canvas.drawCircle(centerX, centerY, burstSize * 0.8f, hitHaloPaint)
+
+                // Sparks
+                for (i in 0..4) {
+                    val sparkOffsetX = effect.sparkOffsetsX[i] * burstSize
+                    val sparkOffsetY = progress * 150f + effect.sparkOffsetsY[i] * 50f
+                    canvas.drawPoint(centerX + sparkOffsetX, centerY - sparkOffsetY, hitSparkPaint)
+                }
             }
 
             // Result text
             val textY = centerY - 100f - progress * 50f
-            hitResultTextPaint.color = Color.rgb(240, 223, 255)
+            hitResultTextPaint.color = if (isPowerMode) Color.rgb(255, 200, 100) else Color.rgb(240, 223, 255)
             val text = when (effect.result) {
                 HitResult.PERFECT -> "PERFECT!"
                 HitResult.GREAT -> "GREAT"
@@ -758,109 +1021,81 @@ class GameRenderer(
         }
     }
 
-    // ========== POWER BAR ==========
+    // ========== GUITAR POWER BAR ==========
+
+    /** Interpolate fretboard left/right edges at a given Y fraction (0=top, 1=bottom of neck) */
+    private fun fbEdgeLeft(t: Float) = fbTopLeft + (fbBotLeft - fbTopLeft) * t
+    private fun fbEdgeRight(t: Float) = fbTopRight + (fbBotRight - fbTopRight) * t
 
     private fun drawPowerBar(canvas: Canvas, state: GameState, frameTimeMs: Long) {
-        val barLeft = powerBarLeft
-        val barRight = powerBarRight
-        val barTop = powerBarTop
-        val barBottom = powerBarBottom
-        val barHeight = powerBarHeight
-        val barCenterX = (barLeft + barRight) / 2f
-        val progress = state.powerBarProgress.coerceIn(0f, 1f)
+        if (guitarBitmap == null) return
+        val targetProgress = state.powerBarProgress.coerceIn(0f, 1f)
 
-        powerBarBgPaint.style = Paint.Style.FILL
-        powerBarBgPaint.shader = null
-        powerBarBgPaint.color = Color.argb(60, 42, 16, 80)
-        rectF.set(barLeft, barTop, barRight, barBottom)
-        canvas.drawRoundRect(rectF, 6f, 6f, powerBarBgPaint)
+        // Smooth lerp toward target (fast catch-up, smooth visual)
+        displayedProgress += (targetProgress - displayedProgress) * 0.08f
+        if (abs(displayedProgress - targetProgress) < 0.002f) displayedProgress = targetProgress
+        val progress = displayedProgress.coerceIn(0f, 1f)
+        val isFull = progress >= 0.99f
 
-        val tierLineY = barBottom - barHeight * 0.5f
-        powerBarBgPaint.color = Color.argb(60, 255, 231, 146) // gold tier line
-        canvas.drawLine(barLeft + 2f, tierLineY, barRight - 2f, tierLineY, powerBarBgPaint)
+        // 1. Always draw empty guitar as base
+        guitarBitmapPaint.alpha = 255
+        canvas.drawBitmap(guitarBitmap, null, guitarDestRect, guitarBitmapPaint)
 
-        if (progress > 0.001f) {
-            val fillHeight = barHeight * progress
-            val fillTop = barBottom - fillHeight
-
-            // Tertiary (#FFE792) highlight for power bar
-            val fillColor = when {
-                progress >= 0.7f -> Color.rgb(255, 231, 146) // gold
-                progress >= 0.3f -> Color.rgb(196, 127, 255) // purple
-                else -> Color.rgb(80, 225, 249)              // cyan
-            }
-            powerBarFillPaint.shader = null
-            powerBarFillPaint.style = Paint.Style.FILL
-            powerBarFillPaint.color = fillColor
-
+        // 2. Clip full guitar from bottom up based on smooth progress
+        if (progress > 0.001f && guitarFullBitmap != null) {
+            val clipTop = guitarBottom - guitarHeight * progress
             canvas.save()
-            canvas.clipRect(barLeft, fillTop, barRight, barBottom)
-            rectF.set(barLeft, barTop, barRight, barBottom)
-            canvas.drawRoundRect(rectF, 6f, 6f, powerBarFillPaint)
+            canvas.clipRect(guitarLeft, clipTop, guitarRight, guitarBottom)
+            guitarBitmapPaint.alpha = 255
+            canvas.drawBitmap(guitarFullBitmap, null, guitarDestRect, guitarBitmapPaint)
             canvas.restore()
+        }
 
-            val flameCount = if (progress > 0.5f) 5 else 3
-            for (i in 0 until flameCount) {
-                val phase = frameTimeMs * 0.004f + i * 1.3f
-                val flameX = barCenterX + sin(phase.toDouble()).toFloat() * powerBarBarWidth * 0.4f
-                val flameY = fillTop - 3f - abs(sin((phase * 1.5f).toDouble())).toFloat() * 14f
-                val flameSize = 2.5f + sin((phase * 0.7f).toDouble()).toFloat() * 1.5f
-                val flameAlpha = (130 + (sin(phase.toDouble()) * 80).toInt()).coerceIn(0, 255)
-                powerBarFlamePaint.color = Color.argb(flameAlpha, 255, 231, 146)
-                canvas.drawCircle(flameX, flameY, flameSize, powerBarFlamePaint)
+        // 3. Fire smoke halo when full — same bitmap particles as hit effects
+        if (isFull && !state.powerActive && fireSmokeBitmaps.isNotEmpty() && whiteSmokeBitmaps.isNotEmpty()) {
+            val t = frameTimeMs * 0.003f
+            val baseSize = guitarWidth * 0.45f
+
+            // Rising fire smoke wisps around guitar body
+            for (i in 0 until haloParticleCount) {
+                val off = i * 4
+                val phase = t + haloParticleData[off]  // pre-stored phase offset
+                val speed = haloParticleData[off + 1]   // speed multiplier
+                val sizeVar = haloParticleData[off + 2]  // size variation
+                val texOff = haloParticleData[off + 3]   // texture index fraction
+
+                // Swirl around guitar center, rise upward
+                val angle = phase + t * speed
+                val radius = guitarWidth * (0.25f + sin((phase * 0.4f).toDouble()).toFloat() * 0.15f)
+                val px = guitarCenterX + sin(angle.toDouble()).toFloat() * radius
+                val riseCycle = ((frameTimeMs + (phase * 500f).toLong()) % 3000L) / 3000f
+                val py = guitarTop + guitarHeight * (0.85f - riseCycle * 0.9f)
+
+                val alpha = ((1f - riseCycle) * 140).toInt().coerceIn(0, 255)
+                if (alpha <= 0) continue
+
+                val halfS = baseSize * (0.3f + sizeVar * 0.4f + riseCycle * 0.3f)
+                val texIdx = (texOff * SMOKE_VARIANT_COUNT).toInt().coerceIn(0, SMOKE_VARIANT_COUNT - 1)
+
+                smokeRectF.set(px - halfS, py - halfS, px + halfS, py + halfS)
+
+                // Fire smoke layer (additive blend)
+                smokePaint.alpha = alpha
+                canvas.drawBitmap(fireSmokeBitmaps[texIdx], null, smokeRectF, smokePaint)
+
+                // White core overlay for bright center
+                smokeCoreOverlayPaint.alpha = (alpha * 0.35f).toInt().coerceIn(0, 255)
+                canvas.drawBitmap(whiteSmokeBitmaps[texIdx], null, smokeRectF, smokeCoreOverlayPaint)
             }
         }
 
-        val borderColor = when {
-            state.powerActive -> {
-                val pulse = (sin(frameTimeMs * 0.008).toFloat() + 1f) / 2f
-                Color.argb((150 + (pulse * 105).toInt()).coerceIn(0, 255), 255, 231, 146)
-            }
-            progress >= 1f -> {
-                val pulse = (sin(frameTimeMs * 0.005).toFloat() + 1f) / 2f
-                Color.argb((100 + (pulse * 100).toInt()).coerceIn(0, 255), 196, 127, 255)
-            }
-            progress >= 0.5f -> Color.argb(100, 196, 127, 255)
-            else -> Color.argb(40, 80, 225, 249)
-        }
-        powerBarBgPaint.style = Paint.Style.STROKE
-        powerBarBgPaint.strokeWidth = if (state.powerActive) 3f else 1.5f
-        powerBarBgPaint.color = borderColor
-        rectF.set(barLeft, barTop, barRight, barBottom)
-        canvas.drawRoundRect(rectF, 6f, 6f, powerBarBgPaint)
-        powerBarBgPaint.style = Paint.Style.FILL
-
+        // 4. Active power: show multiplier on body
         if (state.powerActive) {
             val pulse = (sin(frameTimeMs * 0.006).toFloat() + 1f) / 2f
-            powerBarFlamePaint.color = Color.argb(
-                (40 + (pulse * 60).toInt()).coerceIn(0, 255), 255, 231, 146,
-            )
-            rectF.set(barLeft - 4f, barTop - 4f, barRight + 4f, barBottom + 4f)
-            canvas.drawRoundRect(rectF, 8f, 8f, powerBarFlamePaint)
-        }
-
-        if (state.powerActive) {
-            powerMultTextPaint.textSize = 18f
-            powerMultTextPaint.color = Color.rgb(255, 231, 146)
-            canvas.drawText("${state.powerMultiplier.toInt()}X", barCenterX, barTop - 10f, powerMultTextPaint)
-        } else if (progress >= 0.5f) {
-            val multText = if (progress >= 1f) "4X" else "2X"
-            val pulse = (sin(frameTimeMs * 0.004).toFloat() + 1f) / 2f
-            val alpha = (120 + (pulse * 135).toInt()).coerceIn(0, 255)
-            powerMultTextPaint.textSize = 14f
-            powerMultTextPaint.color = Color.argb(alpha, 255, 231, 146)
-            canvas.drawText(multText, barCenterX, barTop - 6f, powerMultTextPaint)
-        }
-
-        verticalLabelPaint.color = Color.argb(80, 255, 231, 146)
-        val labelChars = "POWER"
-        for (i in labelChars.indices) {
-            canvas.drawText(
-                labelChars[i].toString(),
-                barCenterX,
-                barBottom + 13f + i * 10f,
-                verticalLabelPaint,
-            )
+            val multAlpha = (180 + (pulse * 75).toInt()).coerceIn(0, 255)
+            powerMultTextPaint.textSize = guitarWidth * 0.24f
+            powerMultTextPaint.color = Color.argb(multAlpha, 255, 231, 146)
+            canvas.drawText("${state.powerMultiplier.toInt()}X", guitarCenterX, guitarBodyCenterY, powerMultTextPaint)
         }
     }
 

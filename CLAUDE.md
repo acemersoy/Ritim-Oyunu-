@@ -74,12 +74,17 @@ Package root: `com.rhythmgame` under `android/app/src/main/java/com/rhythmgame/`
 
 ### Game Engine (`game/` package)
 The engine runs on a **dedicated `Thread` with `Thread.MAX_PRIORITY`** (not Choreographer) for uncapped frame rate. Key files:
-- `GameEngine.kt` — game loop thread, touch input dispatch, state management via `StateFlow<GameState>`.
-- `GameRenderer.kt` — all Canvas drawing via `SurfaceHolder.lockHardwareCanvas()` for GPU acceleration.
-- `NoteManager.kt` — note scheduling and hit detection.
+- `GameEngine.kt` — game loop thread, touch input dispatch, state management via `StateFlow<GameState>`. Calculates BPM-based approach time and passes it to renderers and `NoteManager`.
+- `GameRenderer.kt` — highway-style 3D perspective Canvas drawing via `SurfaceHolder.lockHardwareCanvas()`.
+- `ArcGameRenderer.kt` — arc/fan-shaped radial layout renderer (alternative style). Both implement `IGameRenderer`.
+- `NoteManager.kt` — note scheduling and hit detection. `approachTimeMs` is a required constructor parameter (no default).
 - `ScoreManager.kt` — scoring, combo, overpress tracking.
 - `AudioSyncManager.kt` — ExoPlayer wrapper. Position is read ~250 Hz on a background thread and cached in an `AtomicLong` so the render thread never blocks on ExoPlayer.
-- `InputHandler.kt` — maps touch coordinates to lane numbers.
+- `InputHandler.kt` — maps touch coordinates to lane numbers. Accepts optional `arcRenderer` for arc-mode touch mapping.
+
+**BPM-based approach time**: `approachTimeMs = (120f / bpm * 1800f).toLong().coerceIn(1200L, 2800L)`. This flows from `GameEngine` → `NoteManager` + both renderers. Both renderers store it as `approachTimeMsF: Float` for use in hold trail span calculations. Never hardcode `2000f` for hold/note timing—always use `approachTimeMsF`.
+
+**Dual renderer architecture**: `gameScreenStyle` selects `"highway"` (linear 3D) or `"arc"` (radial fan). Both implement `IGameRenderer` and receive `approachTimeMs` in their constructors. Any visual feature added to one renderer should generally be mirrored in the other.
 
 **Critical rendering rules** (any new drawing code must follow these to avoid destroying frame rate):
 - All `Paint` objects are pre-allocated at init. Never `new Paint()` per frame.
@@ -92,6 +97,11 @@ The engine runs on a **dedicated `Thread` with `Thread.MAX_PRIORITY`** (not Chor
 - `highwayBottomWidth = 0.58 * screenWidth`, `highwayTopWidth = 0.05 * screenWidth` — narrow highway leaves ~21% of screen width free on each side for HUD elements (power bar, score, combo). This was tuned for landscape; portrait would want different values.
 - `fretButtonRadius = minOf(highwayBottomWidth / laneCount / 2 * 0.62, screenHeight * 0.055)` — capping by screen height prevents oversized circles on wide landscape screens. Note/hold-trail/hit-effect sizes all derive from `fretButtonRadius` so tuning this one value scales everything proportionally.
 - `perspectiveExponent = 2.5f` controls the steepness of the fake-3D curve in `perspectiveY()` / `perspectiveScale()`.
+
+**Rendering layer order** (in `render()` — adding new layers must respect this z-order):
+1. Background gradient → 2. Star field (twinkling) → 3. Side beams (stage lights) → 4. Highway fill + border → 5. Lane highlights → 6. Hold trails → 7. Strike line → 8. Fret buttons → 9. Note gems (with trail dots + outer ring) → 10. Hit effects + particles → 11. Power bar → 12. HUD (score/combo) → 13. Progress bar → 14. Overlays (countdown/pause).
+
+**Background visuals**: Star field uses a pre-allocated `FloatArray(200)` for 50 stars (x, y, baseAlpha, phase). Side beams reuse a single `beamPath: Path` via `reset()`. Both animate via `sin(frameTimeMs * speed)` for smooth pulse without allocations.
 
 ### UI Theme — "Guitar Hero / Stage Rock"
 - Design tokens centralized in `ui/theme/DesignTokens.kt`. The `DesignTokens.Stage` object holds the stage colors (`FireOrange`, `FireYellow`, `FlameRed`, `StageGold`, `DarkChrome`, `SteelGray`). The older `DesignTokens.Neon` object is kept because `GameRenderer` hardcodes lane colors against it.
@@ -124,3 +134,72 @@ The engine runs on a **dedicated `Thread` with `Thread.MAX_PRIORITY`** (not Chor
 - `GameState` is a `data class` flowing via `StateFlow` from `GameEngine` to Compose. Never mutate it from the UI — the engine is the sole writer.
 - When adding new drawing to `GameRenderer`, follow the "no per-frame allocation" rules above and derive sizes from `fretButtonRadius` / `screenHeight` so landscape scaling stays correct.
 - Landscape-only: do not reintroduce `verticalScroll` on primary screens (`HomeScreen`, `SongDetailScreen`). Fit content via 2-column layouts and tightened typography/heights.
+
+## Relevant Skills (for Claude Code)
+
+Only the skills listed below are relevant to this project. **Do NOT use any skill not on this list** — the vast majority of available skills (genomics, bioinformatics, clinical, blockchain scanners, quantum computing, data science, academic research, lab automation, etc.) are irrelevant to a mobile rhythm game product.
+
+### Planning & Product Development
+- `writing-plans` — feature planning and spec writing
+- `executing-plans` — turning plans into implementation
+- `brainstorming` — feature ideation sessions
+- `hypothesis-generation` — testing product ideas
+- `ask-questions-if-underspecified` — clarify requirements before coding
+
+### Core Development
+- `building-native-ui` — mobile/Compose UI development
+- `frontend-design` — user interface design and polish
+- `code-maturity-assessor` — code quality assessment
+- `receiving-code-review` — processing feedback
+- `requesting-code-review` — initiating review process
+- `modern-python` — backend Python best practices
+- `native-data-fetching` — API layer / data fetching patterns
+- `spec-to-code-compliance` — ensuring code matches spec
+
+### Testing & Quality
+- `test-driven-development` — TDD workflow
+- `verification-before-completion` — pre-completion checklist
+- `systematic-debugging` — structured bug resolution
+- `root-cause-tracing` — finding the real cause of issues
+- `coverage-analysis` — test coverage measurement
+- `mutation-testing` — advanced quality verification
+- `webapp-testing` — UI testing (web client)
+- `playwright-skill` — browser test automation (web client)
+
+### Security (critical for user data)
+- `secure-workflow-guide` — secure development practices
+- `insecure-defaults` — catching bad default configs
+- `zeroize-audit` — sensitive data cleanup
+- `constant-time-analysis` — timing side-channel prevention
+
+### Debug & Problem Solving
+- `when-stuck` — problem-solving dispatch
+- `systematic-debugging` — structured debugging
+- `root-cause-tracing` — tracing to root cause
+- `ask-questions-if-underspecified` — clarifying ambiguity
+
+### UX / UI & Assets
+- `frontend-design` — UI/UX design
+- `canvas-design` — visual art / Canvas drawing
+- `theme-factory` — theming and styling
+- `web-asset-generator` — favicons, icons, splash screens
+- `generate-image` — AI image generation for assets
+
+### Dev Workflow
+- `using-git-worktrees` — parallel feature branches
+- `finishing-a-development-branch` — branch completion checklist
+- `devcontainer-setup` — containerized dev environment
+
+### Performance
+- `optimize-for-gpu` — GPU acceleration (game renderer)
+
+### IGNORED — Do NOT use these skill categories:
+- Genomics / bioinformatics / clinical / neuro / chemistry / physics / astro
+- Blockchain vulnerability scanners (solana, cairo, algorand, cosmos, ton, substrate)
+- Lab automation (benchling, labarchive, dnanexus, opentrons, ginkgo)
+- Academic research (literature-review, paper-lookup, research-grants, scientific-*)
+- Data science overload (shap, vaex, scikit-survival, deepchem, dask, polars, etc.)
+- Quantum computing (qiskit, cirq, pennylane, qutip)
+- Firecrawl variants (firecrawl-crawl, firecrawl-map, firecrawl-interact, etc.)
+- Molecular / protein / drug (rdkit, esm, diffdock, torchdrug, medchem, etc.)
+- Any skill not explicitly listed above
